@@ -5,38 +5,93 @@ export interface CesiumBabylonFusionOptions {
     container: HTMLDivElement;
     cesiumOptions?: Cesium.Viewer.ConstructorOptions;
     basePoint?: Cesium.Cartesian3;
+    /**
+     * 是否启用自动渲染循环
+     * @default true
+     */
+    autoRender?: boolean;
+    /**
+     * 是否启用光照同步
+     * @default true
+     */
+    enableLightSync?: boolean;
 }
 
 export class CesiumBabylonFusion {
-    private viewer: Cesium.Viewer;
-    private engine: BABYLON.Engine;
-    private scene: BABYLON.Scene;
-    private camera: BABYLON.FreeCamera;
-    private sunLight: BABYLON.DirectionalLight;
-    private hemisphericLight: BABYLON.HemisphericLight;
-    private basePoint: Cesium.Cartesian3;
-    private cesiumCanvas: HTMLCanvasElement;
-    private babylonCanvas: HTMLCanvasElement;
+    private viewer!: Cesium.Viewer;
+    private engine!: BABYLON.Engine;
+    private scene!: BABYLON.Scene;
+    private camera!: BABYLON.FreeCamera;
+    private sunLight!: BABYLON.DirectionalLight;
+    private hemisphericLight!: BABYLON.HemisphericLight;
+    private basePoint!: Cesium.Cartesian3;
+    private cesiumCanvas!: HTMLCanvasElement;
+    private babylonCanvas!: HTMLCanvasElement;
+    private _isDisposed: boolean = false;
+    private _autoRender: boolean = true;
+    private _enableLightSync: boolean = true;
+    private _resizeObserver!: ResizeObserver;
+
+    /**
+     * 获取 Cesium 查看器实例
+     */
+    public get cesiumViewer(): Cesium.Viewer {
+        return this.viewer;
+    }
+
+    /**
+     * 获取 Babylon 场景实例
+     */
+    public get babylonScene(): BABYLON.Scene {
+        return this.scene;
+    }
+
+    /**
+     * 获取 Babylon 引擎实例
+     */
+    public get babylonEngine(): BABYLON.Engine {
+        return this.engine;
+    }
 
     constructor(options: CesiumBabylonFusionOptions) {
+        if (!options.container) {
+            throw new Error('Container element is required');
+        }
+
+        this._autoRender = options.autoRender ?? true;
+        this._enableLightSync = options.enableLightSync ?? true;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
 
+        try {
+            this.initializeCanvases(options.container);
+            this.initializeCesium(options.cesiumOptions);
+            this.initializeBabylon();
+            this.setupRenderLoop();
+            this.setupResizeHandling(options.container);
+        } catch (error) {
+            this.dispose();
+            throw error;
+        }
+    }
+
+    private initializeCanvases(container: HTMLDivElement): void {
         // Create Cesium canvas
         this.cesiumCanvas = document.createElement('canvas');
         this.cesiumCanvas.style.width = '100%';
         this.cesiumCanvas.style.height = '100%';
         this.cesiumCanvas.style.position = 'absolute';
-        options.container.appendChild(this.cesiumCanvas);
+        container.appendChild(this.cesiumCanvas);
 
         // Create Babylon canvas
         this.babylonCanvas = document.createElement('canvas');
         this.babylonCanvas.style.width = '100%';
         this.babylonCanvas.style.height = '100%';
         this.babylonCanvas.style.position = 'absolute';
-        this.babylonCanvas.style.pointerEvents = 'none'; // Allow events to pass through to Cesium
-        options.container.appendChild(this.babylonCanvas);
+        this.babylonCanvas.style.pointerEvents = 'none';
+        container.appendChild(this.babylonCanvas);
+    }
 
-        // Initialize Cesium
+    private initializeCesium(cesiumOptions?: Cesium.Viewer.ConstructorOptions): void {
         this.viewer = new Cesium.Viewer(this.cesiumCanvas, {
             useDefaultRenderLoop: false,
             selectionIndicator: false,
@@ -47,37 +102,67 @@ export class CesiumBabylonFusion {
             timeline: false,
             fullscreenButton: false,
             baseLayerPicker: false,
-            ...options.cesiumOptions
+            ...cesiumOptions
         });
+    }
 
-        // Initialize Babylon
+    private initializeBabylon(): void {
         this.engine = new BABYLON.Engine(this.babylonCanvas, true);
         this.scene = new BABYLON.Scene(this.engine);
-
-        // Setup Babylon camera
         this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 0, 0), this.scene);
-
-        // Setup Babylon lights
         this.sunLight = new BABYLON.DirectionalLight('sunLight', new BABYLON.Vector3(0, -1, 0), this.scene);
         this.hemisphericLight = new BABYLON.HemisphericLight('hemisphericLight', new BABYLON.Vector3(0, 1, 0), this.scene);
+    }
 
-        // Start render loops
-        this.engine.runRenderLoop(() => {
-            // 1. 渲染 Cesium 场景
-            this.viewer.render();
+    private setupRenderLoop(): void {
+        if (this._autoRender) {
+            this.engine.runRenderLoop(() => {
+                if (this._isDisposed) return;
 
-            // 2. 同步相机和光照
-            this.moveBabylonCamera();
+                try {
+                    // 1. 渲染 Cesium 场景
+                    this.viewer.render();
 
-            // 3. 渲染 Babylon 场景
-            this.scene.render();
+                    // 2. 同步相机和光照
+                    this.moveBabylonCamera();
+                    if (this._enableLightSync) {
+                        this.updateBabylonLighting();
+                    }
+
+                    // 3. 渲染 Babylon 场景
+                    this.scene.render();
+                } catch (error) {
+                    console.error('Error in render loop:', error);
+                }
+            });
+        }
+    }
+
+    private setupResizeHandling(container: HTMLDivElement): void {
+        this._resizeObserver = new ResizeObserver(() => {
+            if (!this._isDisposed) {
+                this.engine.resize();
+                this.viewer.resize();
+            }
         });
+        this._resizeObserver.observe(container);
+    }
 
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            this.engine.resize();
-            this.viewer.resize();
-        });
+    /**
+     * 手动触发一次渲染
+     * 当 autoRender 为 false 时使用
+     */
+    public render(): void {
+        if (this._isDisposed) {
+            throw new Error('Cannot render after disposal');
+        }
+
+        this.viewer.render();
+        this.moveBabylonCamera();
+        if (this._enableLightSync) {
+            this.updateBabylonLighting();
+        }
+        this.scene.render();
     }
 
     /**
@@ -204,14 +289,32 @@ export class CesiumBabylonFusion {
         return new BABYLON.Vector3(cart.x, cart.z, cart.y);
     }
 
-    public dispose() {
-        // Clean up resources
-        this.viewer.destroy();
-        this.scene.dispose();
-        this.engine.dispose();
+    /**
+     * 释放所有资源
+     */
+    public dispose(): void {
+        if (this._isDisposed) return;
 
-        // Remove canvases
-        this.cesiumCanvas.remove();
-        this.babylonCanvas.remove();
+        this._isDisposed = true;
+
+        if (this._resizeObserver) {
+            this._resizeObserver.disconnect();
+        }
+
+        if (this.engine) {
+            this.engine.dispose();
+        }
+
+        if (this.viewer) {
+            this.viewer.destroy();
+        }
+
+        if (this.cesiumCanvas && this.cesiumCanvas.parentNode) {
+            this.cesiumCanvas.parentNode.removeChild(this.cesiumCanvas);
+        }
+
+        if (this.babylonCanvas && this.babylonCanvas.parentNode) {
+            this.babylonCanvas.parentNode.removeChild(this.babylonCanvas);
+        }
     }
 } 

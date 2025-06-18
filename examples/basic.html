@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cesium-Babylon Fusion Basic Example</title>
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        #container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container"></div>
+    <script type="module">
+        import { CesiumBabylonFusion } from '../dist/index.js';
+        import * as Cesium from 'cesium';
+        import 'cesium/Build/Cesium/Widgets/widgets.css';
+        import * as BABYLON from '@babylonjs/core';
+
+        // 创建容器
+        const container = document.getElementById('container');
+
+        // 初始化融合器
+        const fusion = new CesiumBabylonFusion({
+            container: container,
+            cesiumOptions: {
+                terrainProvider: Cesium.createWorldTerrain(),
+                imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
+                    url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
+                })
+            },
+            // 设置北京为基准点
+            basePoint: Cesium.Cartesian3.fromDegrees(116.391, 39.904, 0)
+        });
+
+        // 添加一个 Babylon.js 3D 模型
+        const box = BABYLON.MeshBuilder.CreateBox("box", { size: 100 }, fusion.babylonScene);
+        box.position = new BABYLON.Vector3(0, 50, 0);
+
+        // 设置相机位置
+        fusion.cesiumViewer.camera.setView({
+            destination: Cesium.Cartesian3.fromDegrees(116.391, 39.904, 1000),
+            orientation: {
+                heading: Cesium.Math.toRadians(0),
+                pitch: Cesium.Math.toRadians(-45),
+                roll: 0
+            }
+        });
+
+        // 清理函数
+        window.addEventListener('beforeunload', () => {
+            fusion.dispose();
+        });
+    </script>
+</body>
+
+</html>

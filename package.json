@@ -1,19 +1,21 @@
 {
   "name": "cesium-babylon-fusion",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A package to integrate Cesium and Babylon.js for 3D visualization",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "examples"
   ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run lint && npm run build"
   },
   "keywords": [
     "cesium",
@@ -24,18 +26,15 @@
   ],
   "author": "andm31",
   "license": "MIT",
-  "dependencies": {
-    "@babylonjs/core": "^8.12.1",
-    "cesium": "^1.130.0"
-  },
   "devDependencies": {
+    "@babylonjs/core": "^8.12.1",
+    "cesium": "^1.130.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
-    "vite-plugin-dts": "^3.7.1",
-    "vitest": "^1.2.1"
+    "vite-plugin-dts": "^3.7.1"
   },
   "peerDependencies": {
-    "@babylonjs/core": "^6.38.1",
-    "cesium": "^1.114.0"
+    "@babylonjs/core": "^8.12.1",
+    "cesium": "^1.130.0"
   }
 }

@@ -255,9 +255,6 @@ export class CesiumBabylonFusion {
         // 这样可以避免直接处理欧拉角，提供更稳定的相机控制
         this.camera.upVector = camera_up;
         this.camera.setTarget(targetPos);
-
-        // 7. 更新光照
-        this.updateBabylonLighting();
     }
 
     /**
@@ -271,13 +268,8 @@ export class CesiumBabylonFusion {
         if (hasLighting) {
             // 2. 获取太阳光源信息
             const time = this.viewer.clock.currentTime;
-
             const sunPosition = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time);
             const secondsDiff = Cesium.JulianDate.secondsDifference(time, Cesium.JulianDate.fromIso8601('2000-01-01'));
-            // Convert seconds to rotation angle (Earth rotates 360 degrees in 24 hours)
-            // 360 degrees = 2π radians
-            // 24 hours = 86400 seconds
-            // So the rotation rate is (2π/86400) radians per second
             const rotationAngle = (secondsDiff * 2 * Math.PI) / 86400;
             const sunPositionInFixed = Cesium.Matrix3.multiplyByVector(
                 Cesium.Matrix3.fromRotationZ(rotationAngle),
@@ -285,30 +277,37 @@ export class CesiumBabylonFusion {
                 new Cesium.Cartesian3()
             );
 
-            // 计算从相机位置指向太阳的方向向量
+            // 计算太阳在地平面以上的高度角
             const cameraPosition = this.viewer.scene.camera.position;
+            const up = Cesium.Cartesian3.normalize(cameraPosition, new Cesium.Cartesian3());
             const sunDirection = Cesium.Cartesian3.subtract(sunPositionInFixed, cameraPosition, new Cesium.Cartesian3());
             Cesium.Cartesian3.normalize(sunDirection, sunDirection);
 
-            const intensity = 1.0;
+            // 计算太阳高度角（点积结果范围在-1到1之间）
+            const sunElevation = Cesium.Cartesian3.dot(up, sunDirection);
 
-            // 3. 转换为 Babylon 的坐标系
-            // 注意：需要反转方向因为 Babylon 和 Cesium 的坐标系不同
+            // 如果太阳在地平线以下，将光照强度设为0，否则使用Cesium的光照强度
+            // 根据太阳高度角计算光照强度，当太阳接近地平线时逐渐减弱
+            const normalizedElevation = Math.max(0, sunElevation);
+            const intensity = sunElevation > 0 ? normalizedElevation : 0.0;
+
+            // 转换为 Babylon 的坐标系
+            // 注意：Cesium和Babylon坐标系的对应关系是：
+            // Cesium(x,y,z) -> Babylon(x,z,y)
             const babylonSunDirection = new BABYLON.Vector3(
-                -sunDirection.x,
-                -sunDirection.y,
-                -sunDirection.z
+                sunDirection.x,
+                sunDirection.z,
+                sunDirection.y
             );
 
-            // 4. 更新 Babylon 场景的光照
-            // 更新直射光方向
+            // 更新 Babylon 场景的光照
             this.sunLight.direction = babylonSunDirection;
-
-            // 5. 设置光照强度
-            // 直射光使用完整强度
             this.sunLight.intensity = intensity;
+
+
+
             // 环境光使用较低的强度以提供柔和的填充光
-            this.hemisphericLight.intensity = intensity * 0.3;
+            this.hemisphericLight.intensity = intensity * 0.3 + 0.1;
         }
     }
 

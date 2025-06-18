@@ -22,16 +22,11 @@ export default defineConfig({
                 globals: {
                     '@babylonjs/core': 'BABYLON',
                     'cesium': 'Cesium'
-                },
-                sourcemap: true
+                }
             }
         },
         sourcemap: true,
-        minify: 'terser',
-        terserOptions: {
-            compress: {
-                drop_console: true
-            }
-        }
+        minify: 'esbuild',
+        target: 'es2015'
     }
 }); 

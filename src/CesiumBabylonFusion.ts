@@ -4,6 +4,11 @@ import * as Cesium from 'cesium';
 export interface CesiumBabylonFusionOptions {
     container: HTMLDivElement;
     cesiumOptions?: Cesium.Viewer.ConstructorOptions;
+    /**
+     * Babylon.js 引擎配置选项
+     * @default { alpha: true }
+     */
+    babylonOptions?: BABYLON.EngineOptions;
     basePoint?: Cesium.Cartesian3;
     /**
      * 是否启用自动渲染循环
@@ -25,12 +30,15 @@ export class CesiumBabylonFusion {
     private sunLight!: BABYLON.DirectionalLight;
     private hemisphericLight!: BABYLON.HemisphericLight;
     private basePoint!: Cesium.Cartesian3;
-    private cesiumCanvas!: HTMLCanvasElement;
+    private basePointBabylon!: BABYLON.Vector3;
+    private cesiumContainer!: HTMLDivElement;
     private babylonCanvas!: HTMLCanvasElement;
+    private rootNode!: BABYLON.TransformNode;
     private _isDisposed: boolean = false;
     private _autoRender: boolean = true;
     private _enableLightSync: boolean = true;
     private _resizeObserver!: ResizeObserver;
+    private _options: CesiumBabylonFusionOptions;
 
     /**
      * 获取 Cesium 查看器实例
@@ -58,9 +66,11 @@ export class CesiumBabylonFusion {
             throw new Error('Container element is required');
         }
 
+        this._options = options;
         this._autoRender = options.autoRender ?? true;
         this._enableLightSync = options.enableLightSync ?? true;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
+        this.basePointBabylon = this.cart2vec(this.basePoint);
 
         try {
             this.initializeCanvases(options.container);
@@ -75,24 +85,32 @@ export class CesiumBabylonFusion {
     }
 
     private initializeCanvases(container: HTMLDivElement): void {
-        // Create Cesium canvas
-        this.cesiumCanvas = document.createElement('canvas');
-        this.cesiumCanvas.style.width = '100%';
-        this.cesiumCanvas.style.height = '100%';
-        this.cesiumCanvas.style.position = 'absolute';
-        container.appendChild(this.cesiumCanvas);
+        // Create Cesium container div
+        const cesiumContainer = document.createElement('div');
+        cesiumContainer.style.left = '0';
+        cesiumContainer.style.top = '0';
+        cesiumContainer.style.width = '100%';
+        cesiumContainer.style.height = '100%';
+        cesiumContainer.style.position = 'absolute';
+        container.appendChild(cesiumContainer);
 
         // Create Babylon canvas
         this.babylonCanvas = document.createElement('canvas');
+        this.babylonCanvas.style.left = '0';
+        this.babylonCanvas.style.top = '0';
         this.babylonCanvas.style.width = '100%';
         this.babylonCanvas.style.height = '100%';
         this.babylonCanvas.style.position = 'absolute';
         this.babylonCanvas.style.pointerEvents = 'none';
         container.appendChild(this.babylonCanvas);
+
+        // Store the cesium container reference
+        this.cesiumContainer = cesiumContainer;
     }
 
     private initializeCesium(cesiumOptions?: Cesium.Viewer.ConstructorOptions): void {
-        this.viewer = new Cesium.Viewer(this.cesiumCanvas, {
+
+        this.viewer = new Cesium.Viewer(this.cesiumContainer, {
             useDefaultRenderLoop: false,
             selectionIndicator: false,
             homeButton: false,
@@ -107,11 +125,26 @@ export class CesiumBabylonFusion {
     }
 
     private initializeBabylon(): void {
-        this.engine = new BABYLON.Engine(this.babylonCanvas, true);
+        // 合并默认配置和用户配置
+        const defaultOptions: BABYLON.EngineOptions = {
+            // alpha: true // 默认启用透明支持
+        };
+        const engineOptions = { ...defaultOptions, ...this._options.babylonOptions };
+
+        this.engine = new BABYLON.Engine(this.babylonCanvas, true, engineOptions);
         this.scene = new BABYLON.Scene(this.engine);
+        this.scene.clearColor = new BABYLON.Color4(0, 0, 0, 0.2);
         this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 0, 0), this.scene);
         this.sunLight = new BABYLON.DirectionalLight('sunLight', new BABYLON.Vector3(0, -1, 0), this.scene);
         this.hemisphericLight = new BABYLON.HemisphericLight('hemisphericLight', new BABYLON.Vector3(0, 1, 0), this.scene);
+
+        // 创建根节点
+        this.rootNode = new BABYLON.TransformNode("BaseNode", this.scene);
+        //cesium在basePoint的地球表面向上方向的法向量
+        const upVector = Cesium.Cartesian3.normalize(Cesium.Cartesian3.add(this.basePoint, Cesium.Cartesian3.fromElements(0, 1, 0), new Cesium.Cartesian3()), new Cesium.Cartesian3());
+        // 设置根节点朝向，yaw和roll设为0，保持默认朝向
+        this.rootNode.lookAt(this.cart2vec(upVector));
+        this.rootNode.addRotation(Math.PI / 2, 0, 0);
     }
 
     private setupRenderLoop(): void {
@@ -180,58 +213,32 @@ export class CesiumBabylonFusion {
         }
         this.camera.fov = fov / 180 * Math.PI; // 转换为弧度
 
-        // 2. 获取 Cesium 相机的逆视图矩阵
-        let civm = this.viewer.camera.inverseViewMatrix;
-        // 创建对应的 Babylon 矩阵
-        let camera_matrix = BABYLON.Matrix.FromValues(
-            civm[0], civm[1], civm[2], civm[3],
-            civm[4], civm[5], civm[6], civm[7],
-            civm[8], civm[9], civm[10], civm[11],
-            civm[12], civm[13], civm[14], civm[15]
+        // 2. 获取 Cesium 相机的位置、方向和上方向
+        const cesiumPos = this.viewer.camera.position;
+        const cesiumDir = this.viewer.camera.direction;
+        const cesiumUp = this.viewer.camera.up;
+
+        // 3. 转换相机位置和方向到 Babylon 坐标系
+        const camera_pos = this.cart2vec(cesiumPos);
+        const camera_dir = this.cart2vec(cesiumDir);
+        const camera_up = this.cart2vec(cesiumUp);
+
+        // 4. 应用位置（考虑基准点偏移）
+        this.camera.position.x = camera_pos.x - this.basePointBabylon.x;
+        this.camera.position.y = camera_pos.y - this.basePointBabylon.y;
+        this.camera.position.z = camera_pos.z - this.basePointBabylon.z;
+
+        // 5. 创建目标点（在相机前方）
+        const targetPos = new BABYLON.Vector3(
+            this.camera.position.x + camera_dir.x,
+            this.camera.position.y + camera_dir.y,
+            this.camera.position.z + camera_dir.z
         );
 
-        // 3. 分解矩阵获取位置和旋转信息
-        let scaling = new BABYLON.Vector3();
-        let rotation = new BABYLON.Quaternion();
-        let transform = new BABYLON.Vector3();
-        camera_matrix.decompose(scaling, rotation, transform);
-
-        // 4. 转换相机位置和方向
-        // 注意：Cesium 和 Babylon 使用不同的坐标系，需要转换
-        let camera_pos = this.cart2vec(transform as unknown as Cesium.Cartesian3);
-        let camera_direction = this.cart2vec(this.viewer.camera.direction);
-        let camera_up = this.cart2vec(this.viewer.camera.up);
-
-        // 5. 计算欧拉角旋转
-        // 计算 Y 轴旋转（偏航角）
-        let rotation_y = Math.atan(camera_direction.z / camera_direction.x);
-        if (camera_direction.x < 0) rotation_y += Math.PI;
-        rotation_y = Math.PI / 2 - rotation_y;
-
-        // 计算 X 轴旋转（俯仰角）
-        let rotation_x = Math.asin(-camera_direction.y);
-
-        // 计算 Z 轴旋转（翻滚角）
-        // 首先计算相机向上方向在 Y 轴旋转之前的理论值
-        let camera_up_before_rotatez = new BABYLON.Vector3(-Math.cos(rotation_y), 0, Math.sin(rotation_y));
-        // 然后通过当前相机向上方向和理论值的夹角计算 Z 轴旋转
-        let rotation_z = Math.acos(
-            camera_up.x * camera_up_before_rotatez.x +
-            camera_up.y * camera_up_before_rotatez.y +
-            camera_up.z * camera_up_before_rotatez.z
-        );
-        rotation_z = Math.PI / 2 - rotation_z;
-        if (camera_up.y < 0) rotation_z = Math.PI - rotation_z;
-
-        // 6. 应用位置和旋转
-        // 位置需要考虑基准点的偏移
-        this.camera.position.x = camera_pos.x - this.basePoint.x;
-        this.camera.position.y = camera_pos.y - this.basePoint.y;
-        this.camera.position.z = camera_pos.z - this.basePoint.z;
-        // 应用欧拉角旋转
-        this.camera.rotation.x = rotation_x;
-        this.camera.rotation.y = rotation_y;
-        this.camera.rotation.z = rotation_z;
+        // 6. 使用 lookAt 来设置相机方向
+        // 这样可以避免直接处理欧拉角，提供更稳定的相机控制
+        this.camera.upVector = camera_up;
+        this.camera.setTarget(targetPos);
 
         // 7. 更新光照
         this.updateBabylonLighting();
@@ -309,12 +316,19 @@ export class CesiumBabylonFusion {
             this.viewer.destroy();
         }
 
-        if (this.cesiumCanvas && this.cesiumCanvas.parentNode) {
-            this.cesiumCanvas.parentNode.removeChild(this.cesiumCanvas);
+        if (this.cesiumContainer && this.cesiumContainer.parentNode) {
+            this.cesiumContainer.parentNode.removeChild(this.cesiumContainer);
         }
 
         if (this.babylonCanvas && this.babylonCanvas.parentNode) {
             this.babylonCanvas.parentNode.removeChild(this.babylonCanvas);
         }
+    }
+
+    /**
+     * 获取根节点实例
+     */
+    public get babylonRootNode(): BABYLON.TransformNode {
+        return this.rootNode;
     }
 } 

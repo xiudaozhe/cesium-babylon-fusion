@@ -1,6 +1,6 @@
 {
   "name": "cesium-babylon-fusion",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A package to integrate Cesium and Babylon.js for 3D visualization",
   "type": "module",
   "main": "dist/index.js",

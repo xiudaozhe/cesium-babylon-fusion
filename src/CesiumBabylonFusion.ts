@@ -127,7 +127,7 @@ export class CesiumBabylonFusion {
     private initializeBabylon(): void {
         // 合并默认配置和用户配置
         const defaultOptions: BABYLON.EngineOptions = {
-            // alpha: true // 默认启用透明支持
+            alpha: true // 默认启用透明支持
         };
         const engineOptions = { ...defaultOptions, ...this._options.babylonOptions };
 
@@ -145,6 +145,22 @@ export class CesiumBabylonFusion {
         // 设置根节点朝向，yaw和roll设为0，保持默认朝向
         this.rootNode.lookAt(this.cart2vec(upVector));
         this.rootNode.addRotation(Math.PI / 2, 0, 0);
+
+        // 设置自动mesh父节点
+        this.setupAutoMeshParenting();
+    }
+
+    /**
+     * 设置自动mesh父节点功能
+     * 当新的mesh被添加到场景时，自动将其设置为rootNode的子节点
+     */
+    private setupAutoMeshParenting(): void {
+        this.scene.onNewMeshAddedObservable.add((mesh) => {
+            // 如果mesh还没有父节点，并且不是从其他父节点继承而来的
+            if (!mesh.parent) {
+                mesh.parent = this.rootNode;
+            }
+        });
     }
 
     private setupRenderLoop(): void {
@@ -250,29 +266,33 @@ export class CesiumBabylonFusion {
      */
     private updateBabylonLighting() {
         // 1. 检查 Cesium 是否启用了光照
-        // sphericalHarmonicCoefficients 存在表示场景中有光照计算
-        const sunPosition = this.viewer.scene.globe.enableLighting &&
-            this.viewer.scene.globe.lightingFadeOutDistance > 0
-            ? this.viewer.scene.sphericalHarmonicCoefficients
-            : null;
+        const hasLighting = this.viewer.scene.globe.enableLighting;
 
-        if (sunPosition) {
+        if (hasLighting) {
             // 2. 获取太阳光源信息
-            const light = this.viewer.scene.light;
-            const sunDirection = new Cesium.Cartesian3();
-            // 如果有光源使用 1.0 的强度，否则使用 0.5 作为默认值
-            const intensity = light ? 1.0 : 0.5;
+            const time = this.viewer.clock.currentTime;
 
-            // 3. 确定太阳方向
-            if (light && 'direction' in light && light.direction instanceof Cesium.Cartesian3) {
-                // 如果有有效的光源方向，就使用它
-                Cesium.Cartesian3.clone(light.direction, sunDirection);
-            } else {
-                // 否则使用默认的向下方向
-                Cesium.Cartesian3.fromElements(0, -1, 0, sunDirection);
-            }
+            const sunPosition = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time);
+            const secondsDiff = Cesium.JulianDate.secondsDifference(time, Cesium.JulianDate.fromIso8601('2000-01-01'));
+            // Convert seconds to rotation angle (Earth rotates 360 degrees in 24 hours)
+            // 360 degrees = 2π radians
+            // 24 hours = 86400 seconds
+            // So the rotation rate is (2π/86400) radians per second
+            const rotationAngle = (secondsDiff * 2 * Math.PI) / 86400;
+            const sunPositionInFixed = Cesium.Matrix3.multiplyByVector(
+                Cesium.Matrix3.fromRotationZ(rotationAngle),
+                sunPosition,
+                new Cesium.Cartesian3()
+            );
 
-            // 4. 转换为 Babylon 的坐标系
+            // 计算从相机位置指向太阳的方向向量
+            const cameraPosition = this.viewer.scene.camera.position;
+            const sunDirection = Cesium.Cartesian3.subtract(sunPositionInFixed, cameraPosition, new Cesium.Cartesian3());
+            Cesium.Cartesian3.normalize(sunDirection, sunDirection);
+
+            const intensity = 1.0;
+
+            // 3. 转换为 Babylon 的坐标系
             // 注意：需要反转方向因为 Babylon 和 Cesium 的坐标系不同
             const babylonSunDirection = new BABYLON.Vector3(
                 -sunDirection.x,
@@ -280,11 +300,11 @@ export class CesiumBabylonFusion {
                 -sunDirection.z
             );
 
-            // 5. 更新 Babylon 场景的光照
+            // 4. 更新 Babylon 场景的光照
             // 更新直射光方向
             this.sunLight.direction = babylonSunDirection;
 
-            // 6. 设置光照强度
+            // 5. 设置光照强度
             // 直射光使用完整强度
             this.sunLight.intensity = intensity;
             // 环境光使用较低的强度以提供柔和的填充光

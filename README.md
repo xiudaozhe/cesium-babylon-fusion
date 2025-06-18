@@ -12,6 +12,8 @@ A TypeScript library for integrating Cesium and Babylon.js. This package impleme
 - **TypeScript Support**: Complete TypeScript type definitions
 - **Flexible Control**: Optional manual rendering and lighting sync control
 - **Efficient Memory Usage**: Proper resource disposal and memory management
+- **Automatic Mesh Parenting**: Automatically parents new Babylon.js meshes to a root node
+- **Transparent Canvas Support**: Built-in alpha channel support for Babylon.js canvas
 
 ## Installation
 
@@ -73,12 +75,20 @@ const fusion = new CesiumBabylonFusion({
         })
     },
     // Set Beijing as the base point
-    basePoint: Cesium.Cartesian3.fromDegrees(116.391, 39.904, 0)
+    basePoint: Cesium.Cartesian3.fromDegrees(116.391, 39.904, 0),
+    // Optional Babylon.js engine options
+    babylonOptions: {
+        alpha: true,
+        antialias: true
+    }
 });
 
 // Access individual engines
 const cesiumViewer = fusion.cesiumViewer;
 const babylonScene = fusion.babylonScene;
+
+// Access the root node for adding custom meshes
+const rootNode = fusion.babylonRootNode;
 
 // Clean up resources
 function cleanup() {
@@ -129,6 +139,7 @@ Main class handling the integration between Cesium and Babylon.js.
 interface CesiumBabylonFusionOptions {
     container: HTMLDivElement;           // Container element for both canvases
     cesiumOptions?: Cesium.Viewer.ConstructorOptions; // Optional Cesium viewer options
+    babylonOptions?: BABYLON.EngineOptions; // Optional Babylon.js engine options
     basePoint?: Cesium.Cartesian3;       // Optional coordinate system base point
     autoRender?: boolean;                // Enable automatic rendering (default: true)
     enableLightSync?: boolean;           // Enable lighting sync (default: true)
@@ -163,12 +174,20 @@ Uses a unified render loop executing in the following order:
 - Uses Cesium's coordinate system as the primary reference
 - Automatically converts between Cesium and Babylon.js coordinate systems
 - Supports local coordinate system alignment using a base point
+- Provides a root transform node for proper mesh positioning
+
+### Lighting System
+- Synchronizes Babylon.js directional light with Cesium's sun position
+- Adjusts light intensity based on sun elevation
+- Provides ambient lighting through hemispheric light
+- Supports day/night cycle simulation
 
 ### Performance Considerations
 - Single render loop controlling both engines
 - Efficient matrix decomposition for camera transforms
 - Optimized lighting synchronization
 - Proper resource cleanup and memory management
+- Automatic canvas resizing through ResizeObserver
 
 ## Common Issues
 
@@ -183,12 +202,15 @@ The package automatically handles coordinate conversion between Cesium and Babyl
 1. Cesium uses a geographic coordinate system (WGS84)
 2. Babylon.js uses a local Cartesian coordinate system
 3. Use `basePoint` to set the origin of the local coordinate system
+4. All Babylon.js meshes are automatically parented to a root node for proper positioning
 
 ### How to debug rendering issues?
 1. Check console for error messages
 2. Verify container size is set correctly
 3. Confirm Cesium assets are loading properly
 4. Check camera synchronization is working
+5. Verify mesh parenting hierarchy
+6. Ensure proper transparency settings if meshes are not visible
 
 ## Examples
 

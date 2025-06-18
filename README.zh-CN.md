@@ -2,6 +2,19 @@
 
 一个用于集成 Cesium 和 Babylon.js 的 TypeScript 库。本包实现了 Cesium 和 Babylon.js 场景之间的相机运动和光照同步，并内部管理两个引擎的画布，实现无缝集成。
 
+## 特性
+
+- **自动画布管理**：内部创建和管理 Cesium 和 Babylon.js 的画布
+- **统一渲染循环**：单一渲染循环控制两个引擎，提供更好的性能
+- **相机同步**：精确的相机位置和旋转同步
+- **动态光照**：将 Babylon.js 的光照与 Cesium 的太阳位置和强度匹配
+- **资源管理**：自动清理资源和事件监听器
+- **TypeScript 支持**：包含完整的 TypeScript 类型定义
+- **灵活控制**：可选的手动渲染和光照同步控制
+- **高效内存使用**：合理的资源释放和内存管理
+- **自动网格节点管理**：自动为 Babylon.js 网格设置父节点
+- **透明画布支持**：内置对 Babylon.js 画布的透明通道支持
+
 ## 安装
 
 首先，安装本包：
@@ -35,7 +48,7 @@ export default defineConfig({
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 ```
 
-## 使用方法
+## 基本用法
 
 以下是一个基本的使用示例：
 
@@ -43,6 +56,7 @@ import 'cesium/Build/Cesium/Widgets/widgets.css';
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { CesiumBabylonFusion } from 'cesium-babylon-fusion';
+import * as BABYLON from '@babylonjs/core';
 
 // 创建容器 div
 const container = document.createElement('div');
@@ -55,15 +69,26 @@ document.body.appendChild(container);
 const fusion = new CesiumBabylonFusion({
     container: container,
     cesiumOptions: {
-        // 可选：配置 Cesium 查看器
         terrainProvider: Cesium.createWorldTerrain(),
         imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
             url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer'
         })
     },
-    // 可选：设置坐标系统对齐的基准点
-    basePoint: Cesium.Cartesian3.fromDegrees(116.391, 39.904, 0) // 以北京为例
+    // 设置北京为基准点
+    basePoint: Cesium.Cartesian3.fromDegrees(116.391, 39.904, 0),
+    // 可选的 Babylon.js 引擎选项
+    babylonOptions: {
+        alpha: true,
+        antialias: true
+    }
 });
+
+// 访问各个引擎实例
+const cesiumViewer = fusion.cesiumViewer;
+const babylonScene = fusion.babylonScene;
+
+// 访问根节点
+const rootNode = fusion.babylonRootNode;
 
 // 清理资源
 function cleanup() {
@@ -71,14 +96,46 @@ function cleanup() {
 }
 ```
 
-## 特性
+## 高级用法
 
-- **自动画布管理**：内部创建和管理 Cesium 和 Babylon.js 的画布
-- **统一渲染循环**：单一渲染循环控制两个引擎，提供更好的性能
-- **相机同步**：精确的相机位置和旋转同步
-- **动态光照**：将 Babylon.js 的光照与 Cesium 的太阳位置和强度匹配
-- **资源管理**：自动清理资源和事件监听器
-- **TypeScript 支持**：包含完整的 TypeScript 类型定义
+### 手动渲染控制
+
+您可以禁用自动渲染并手动控制：
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container,
+    autoRender: false // 禁用自动渲染
+});
+
+// 在需要时手动触发渲染
+function animate() {
+    fusion.render();
+    requestAnimationFrame(animate);
+}
+animate();
+```
+
+### 禁用光照同步
+
+如果您想独立控制 Babylon.js 的光照：
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container,
+    enableLightSync: false // 禁用自动光照同步
+});
+```
+
+### 使用 Babylon.js 网格
+
+库会自动为新创建的网格设置父节点，以确保正确的坐标系统对齐：
+
+```typescript
+// 创建一个新的网格
+const box = BABYLON.MeshBuilder.CreateBox("box", {}, fusion.babylonScene);
+// 该网格会自动被设置正确的父节点，无需手动设置
+```
 
 ## API 参考
 
@@ -92,13 +149,24 @@ function cleanup() {
 interface CesiumBabylonFusionOptions {
     container: HTMLDivElement;           // 两个画布的容器元素
     cesiumOptions?: Cesium.Viewer.ConstructorOptions; // 可选的 Cesium 查看器选项
+    babylonOptions?: BABYLON.EngineOptions; // 可选的 Babylon.js 引擎选项
     basePoint?: Cesium.Cartesian3;       // 可选的坐标系统基准点
+    autoRender?: boolean;                // 启用自动渲染（默认：true）
+    enableLightSync?: boolean;           // 启用光照同步（默认：true）
 }
 ```
 
+#### 属性
+
+- `cesiumViewer`：获取 Cesium 查看器实例
+- `babylonScene`：获取 Babylon.js 场景实例
+- `babylonEngine`：获取 Babylon.js 引擎实例
+- `babylonRootNode`：获取用于网格父节点的根变换节点
+
 #### 方法
 
-- `dispose()`: 清理资源，停止渲染循环，并移除画布
+- `render()`：手动触发渲染帧
+- `dispose()`：清理资源，停止渲染循环，并移除画布
 
 ## 技术细节
 
@@ -117,11 +185,20 @@ interface CesiumBabylonFusionOptions {
 - 使用 Cesium 的坐标系统作为主要参考
 - 自动在 Cesium 和 Babylon.js 坐标系统之间转换
 - 支持使用基准点进行局部坐标系统对齐
+- 提供根变换节点用于正确的网格定位
+
+### 光照系统
+- 将 Babylon.js 的平行光与 Cesium 的太阳位置同步
+- 根据太阳高度调整光照强度
+- 通过半球光提供环境光照
+- 支持昼夜循环模拟
 
 ### 性能考虑
 - 单一渲染循环控制两个引擎
 - 高效的矩阵分解用于相机变换
 - 优化的光照同步
+- 合理的资源清理和内存管理
+- 通过 ResizeObserver 自动调整画布大小
 
 ## 常见问题
 
@@ -136,12 +213,25 @@ interface CesiumBabylonFusionOptions {
 1. Cesium 使用地理坐标系统（WGS84）
 2. Babylon.js 使用局部笛卡尔坐标系统
 3. 可以使用 `basePoint` 设置局部坐标系统的原点
+4. 所有 Babylon.js 网格会自动设置正确的父节点以确保正确定位
 
 ### 如何调试渲染问题？
 1. 检查控制台是否有错误信息
 2. 确认容器大小设置正确
 3. 验证 Cesium 资源是否正确加载
 4. 检查相机同步是否正常工作
+5. 验证网格的父子层级关系
+6. 如果网格不可见，请确认透明度设置是否正确
+
+## 示例
+
+查看 `examples` 目录以获取更详细的示例：
+- `basic.html`：基本设置和使用
+- 更多示例即将推出...
+
+## 贡献
+
+欢迎贡献！请随时提交 Pull Request。
 
 ## 许可证
 

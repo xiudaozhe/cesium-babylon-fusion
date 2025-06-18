@@ -20,6 +20,10 @@ export interface CesiumBabylonFusionOptions {
      * @default true
      */
     enableLightSync?: boolean;
+    /**
+     * 点击事件回调
+     */
+    onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void;
 }
 
 export class CesiumBabylonFusion {
@@ -76,6 +80,7 @@ export class CesiumBabylonFusion {
             this.initializeCanvases(options.container);
             this.initializeCesium(options.cesiumOptions);
             this.initializeBabylon();
+            this.setupClickHandling();
             this.setupRenderLoop();
             this.setupResizeHandling(options.container);
         } catch (error) {
@@ -349,5 +354,39 @@ export class CesiumBabylonFusion {
      */
     public get babylonRootNode(): BABYLON.TransformNode {
         return this.rootNode;
+    }
+
+    /**
+     * 设置点击事件处理
+     * 将Cesium的点击事件转发到Babylon场景中进行拾取测试
+     */
+    private setupClickHandling(): void {
+        // 只在设置了回调函数时添加点击事件处理
+        if (!this._options.onMeshPicked) {
+            return;
+        }
+
+        // 保存this引用以在事件处理函数中使用
+        const _this = this;
+        const onMeshPicked = this._options.onMeshPicked;
+
+        // 添加点击事件处理
+        this.viewer.screenSpaceEventHandler.setInputAction(function (click: { position: Cesium.Cartesian2 }) {
+            // 获取点击位置的Cesium坐标
+            const pickedPosition = _this.viewer.scene.pickPosition(click.position);
+
+            if (Cesium.defined(pickedPosition)) {
+                // 将Cesium坐标转换为Babylon坐标（考虑基准点偏移）
+                const babylonPos = _this.cart2vec(pickedPosition);
+                babylonPos.subtractInPlace(_this.basePointBabylon);
+
+                // 在Babylon场景中执行拾取测试
+                const pickResult = _this.scene.pick(click.position.x, click.position.y);
+                const pickedMesh = pickResult ? pickResult.pickedMesh : null;
+
+                // 调用回调函数
+                onMeshPicked(pickedMesh);
+            }
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
     }
 } 

@@ -127,6 +127,22 @@ const fusion = new CesiumBabylonFusion({
 });
 ```
 
+### Handle Mesh Click Events
+
+You can handle click events on Babylon.js meshes through Cesium's viewer:
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container,
+    onMeshPicked: (mesh) => {
+        if (mesh) {
+            console.log('Clicked mesh:', mesh.name);
+            // Handle the clicked mesh
+        }
+    }
+});
+```
+
 ## API Reference
 
 ### CesiumBabylonFusion
@@ -143,6 +159,7 @@ interface CesiumBabylonFusionOptions {
     basePoint?: Cesium.Cartesian3;       // Optional coordinate system base point
     autoRender?: boolean;                // Enable automatic rendering (default: true)
     enableLightSync?: boolean;           // Enable lighting sync (default: true)
+    onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // Callback for mesh click events
 }
 ```
 

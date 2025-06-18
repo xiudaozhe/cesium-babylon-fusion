@@ -127,6 +127,22 @@ const fusion = new CesiumBabylonFusion({
 });
 ```
 
+### 处理网格点击事件
+
+您可以通过 Cesium 的点击事件来处理 Babylon.js 网格的点击：
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container,
+    onMeshPicked: (mesh) => {
+        if (mesh) {
+            console.log('点击的网格:', mesh.name);
+            // 处理被点击的网格
+        }
+    }
+});
+```
+
 ### 使用 Babylon.js 网格
 
 库会自动为新创建的网格设置父节点，以确保正确的坐标系统对齐：
@@ -153,6 +169,7 @@ interface CesiumBabylonFusionOptions {
     basePoint?: Cesium.Cartesian3;       // 可选的坐标系统基准点
     autoRender?: boolean;                // 启用自动渲染（默认：true）
     enableLightSync?: boolean;           // 启用光照同步（默认：true）
+    onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // 网格点击事件回调函数
 }
 ```
 

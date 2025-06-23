@@ -301,12 +301,20 @@ export class CesiumBabylonFusion {
             // 保存当前太阳光方向
             this._currentSunDirection = babylonSunDirection;
 
+            // 计算太阳高度角（与地平面的夹角）
+            const heightAngle = Math.asin(babylonSunDirection.y);
+            // 计算光照强度（0-1之间）
+            // 当太阳在地平线以下时为0，正上方时为1，之间线性插值
+            const intensity = Math.max(0, Math.sin(heightAngle));
+
             // 更新或创建太阳光
             if (this._enableLightSync) {
                 if (!this.sunLight) {
                     this.sunLight = new BABYLON.DirectionalLight('sunLight', this._currentSunDirection.scale(-1), this.scene);
                 } else {
                     this.sunLight.direction = this._currentSunDirection.scale(-1);
+                    // 设置光照强度
+                    this.sunLight.intensity = intensity;
                 }
             } else if (this.sunLight) {
                 this.sunLight.dispose();

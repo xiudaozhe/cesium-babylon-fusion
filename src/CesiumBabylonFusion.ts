@@ -21,6 +21,11 @@ export interface CesiumBabylonFusionOptions {
      */
     enableLightSync?: boolean;
     /**
+     * 是否显示太阳方向指示线
+     * @default true
+     */
+    showSunDirectionLine?: boolean;
+    /**
      * 点击事件回调
      */
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void;
@@ -31,8 +36,7 @@ export class CesiumBabylonFusion {
     private engine!: BABYLON.Engine;
     private scene!: BABYLON.Scene;
     private camera!: BABYLON.FreeCamera;
-    private sunLight!: BABYLON.DirectionalLight;
-    private hemisphericLight!: BABYLON.HemisphericLight;
+    private sunLight: BABYLON.DirectionalLight | null = null;
     private basePoint!: Cesium.Cartesian3;
     private basePointBabylon!: BABYLON.Vector3;
     private cesiumContainer!: HTMLDivElement;
@@ -41,8 +45,19 @@ export class CesiumBabylonFusion {
     private _isDisposed: boolean = false;
     private _autoRender: boolean = true;
     private _enableLightSync: boolean = true;
+    private _showSunDirectionLine: boolean = true;
     private _resizeObserver!: ResizeObserver;
     private _options: CesiumBabylonFusionOptions;
+    private _directionLine: BABYLON.LinesMesh | null = null;
+    private _currentSunDirection: BABYLON.Vector3 = new BABYLON.Vector3(0, -1, 0);
+
+    /**
+     * 获取当前太阳光方向
+     * @returns Babylon坐标系下的太阳光方向向量
+     */
+    public get sunDirection(): BABYLON.Vector3 {
+        return this._currentSunDirection.clone();
+    }
 
     /**
      * 获取 Cesium 查看器实例
@@ -73,6 +88,7 @@ export class CesiumBabylonFusion {
         this._options = options;
         this._autoRender = options.autoRender ?? true;
         this._enableLightSync = options.enableLightSync ?? true;
+        this._showSunDirectionLine = options.showSunDirectionLine ?? true;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
         this.basePointBabylon = this.cart2vec(this.basePoint);
 
@@ -127,6 +143,7 @@ export class CesiumBabylonFusion {
             baseLayerPicker: false,
             ...cesiumOptions
         });
+
     }
 
     private initializeBabylon(): void {
@@ -140,32 +157,11 @@ export class CesiumBabylonFusion {
         this.scene = new BABYLON.Scene(this.engine);
         this.scene.clearColor = new BABYLON.Color4(0, 0, 0, 0.2);
         this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 0, 0), this.scene);
-        this.sunLight = new BABYLON.DirectionalLight('sunLight', new BABYLON.Vector3(0, -1, 0), this.scene);
-        this.hemisphericLight = new BABYLON.HemisphericLight('hemisphericLight', new BABYLON.Vector3(0, 1, 0), this.scene);
 
-        // 创建根节点
-        this.rootNode = new BABYLON.TransformNode("BaseNode", this.scene);
-        //cesium在basePoint的地球表面向上方向的法向量
-        const upVector = Cesium.Cartesian3.normalize(Cesium.Cartesian3.add(this.basePoint, Cesium.Cartesian3.fromElements(0, 1, 0), new Cesium.Cartesian3()), new Cesium.Cartesian3());
-        // 设置根节点朝向，yaw和roll设为0，保持默认朝向
-        this.rootNode.lookAt(this.cart2vec(upVector));
-        this.rootNode.addRotation(Math.PI / 2, 0, 0);
-
-        // 设置自动mesh父节点
-        this.setupAutoMeshParenting();
-    }
-
-    /**
-     * 设置自动mesh父节点功能
-     * 当新的mesh被添加到场景时，自动将其设置为rootNode的子节点
-     */
-    private setupAutoMeshParenting(): void {
-        this.scene.onNewMeshAddedObservable.add((mesh) => {
-            // 如果mesh还没有父节点，并且不是从其他父节点继承而来的
-            if (!mesh.parent) {
-                mesh.parent = this.rootNode;
-            }
-        });
+        // 只在启用光照同步时创建太阳光
+        if (this._enableLightSync) {
+            this.sunLight = new BABYLON.DirectionalLight('sunLight', this._currentSunDirection.scale(-1), this.scene);
+        }
     }
 
     private setupRenderLoop(): void {
@@ -239,16 +235,14 @@ export class CesiumBabylonFusion {
         const cesiumDir = this.viewer.camera.direction;
         const cesiumUp = this.viewer.camera.up;
 
+
         // 3. 转换相机位置和方向到 Babylon 坐标系
-        const camera_pos = this.cart2vec(cesiumPos);
-        const camera_dir = this.cart2vec(cesiumDir);
-        const camera_up = this.cart2vec(cesiumUp);
+        const camera_pos = this.cartesianToBabylon(cesiumPos);
+        const camera_dir = this.cesiumDirectionToBabylon(cesiumDir);
+        const camera_up = this.cesiumDirectionToBabylon(cesiumUp);
 
         // 4. 应用位置（考虑基准点偏移）
-        this.camera.position.x = camera_pos.x - this.basePointBabylon.x;
-        this.camera.position.y = camera_pos.y - this.basePointBabylon.y;
-        this.camera.position.z = camera_pos.z - this.basePointBabylon.z;
-
+        this.camera.position = camera_pos;
         // 5. 创建目标点（在相机前方）
         const targetPos = new BABYLON.Vector3(
             this.camera.position.x + camera_dir.x,
@@ -271,53 +265,155 @@ export class CesiumBabylonFusion {
         const hasLighting = this.viewer.scene.globe.enableLighting;
 
         if (hasLighting) {
-            // 2. 获取太阳光源信息
-            const time = this.viewer.clock.currentTime;
-            const sunPosition = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time);
-            const secondsDiff = Cesium.JulianDate.secondsDifference(time, Cesium.JulianDate.fromIso8601('2000-01-01'));
-            const rotationAngle = (secondsDiff * 2 * Math.PI) / 86400;
-            const sunPositionInFixed = Cesium.Matrix3.multiplyByVector(
-                Cesium.Matrix3.fromRotationZ(rotationAngle),
-                sunPosition,
+            // 获取当前时间
+            const julianDate = this.viewer.clock.currentTime;
+
+            // 计算太阳位置
+            // 1. 获取太阳在惯性坐标系中的位置
+            const inertialSunPosition = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(julianDate);
+
+            // 2. 获取地球旋转矩阵（从惯性坐标系到ECEF）
+            const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate);
+
+            if (!icrfToFixed) {
+                return; // 如果转换矩阵不可用，跳过更新
+            }
+
+            // 3. 将太阳位置从惯性坐标系转换到ECEF
+            const sunPosition = Cesium.Matrix3.multiplyByVector(
+                icrfToFixed,
+                inertialSunPosition,
                 new Cesium.Cartesian3()
             );
 
-            // 计算太阳在地平面以上的高度角
-            const cameraPosition = this.viewer.scene.camera.position;
-            const up = Cesium.Cartesian3.normalize(cameraPosition, new Cesium.Cartesian3());
-            const sunDirection = Cesium.Cartesian3.subtract(sunPositionInFixed, cameraPosition, new Cesium.Cartesian3());
-            Cesium.Cartesian3.normalize(sunDirection, sunDirection);
-
-            // 计算太阳高度角（点积结果范围在-1到1之间）
-            const sunElevation = Cesium.Cartesian3.dot(up, sunDirection);
-
-            // 如果太阳在地平线以下，将光照强度设为0，否则使用Cesium的光照强度
-            // 根据太阳高度角计算光照强度，当太阳接近地平线时逐渐减弱
-            const normalizedElevation = Math.max(0, sunElevation);
-            const intensity = sunElevation > 0 ? normalizedElevation : 0.0;
-
-            // 转换为 Babylon 的坐标系
-            // 注意：Cesium和Babylon坐标系的对应关系是：
-            // Cesium(x,y,z) -> Babylon(x,z,y)
-            const babylonSunDirection = new BABYLON.Vector3(
-                sunDirection.x,
-                sunDirection.z,
-                sunDirection.y
+            // 4. 计算从基准点到太阳的方向向量
+            const sunDirection = Cesium.Cartesian3.subtract(
+                sunPosition,
+                this.basePoint,
+                new Cesium.Cartesian3()
             );
 
-            // 更新 Babylon 场景的光照
-            this.sunLight.direction = babylonSunDirection;
-            this.sunLight.intensity = intensity;
+            // 5. 归一化方向向量
+            Cesium.Cartesian3.normalize(sunDirection, sunDirection);
 
+            // 将Cesium的方向向量转换为Babylon坐标系
+            const babylonSunDirection = this.cesiumDirectionToBabylon(sunDirection);
+            // 保存当前太阳光方向
+            this._currentSunDirection = babylonSunDirection;
 
+            // 更新或创建太阳光
+            if (this._enableLightSync) {
+                if (!this.sunLight) {
+                    this.sunLight = new BABYLON.DirectionalLight('sunLight', this._currentSunDirection.scale(-1), this.scene);
+                } else {
+                    this.sunLight.direction = this._currentSunDirection.scale(-1);
+                }
+            } else if (this.sunLight) {
+                this.sunLight.dispose();
+                this.sunLight = null;
+            }
 
-            // 环境光使用较低的强度以提供柔和的填充光
-            this.hemisphericLight.intensity = intensity * 0.3 + 0.1;
+            // 计算终点位置 (基准点 + 方向向量 * 1000)
+            const endPoint = Cesium.Cartesian3.add(
+                this.basePoint,
+                Cesium.Cartesian3.multiplyByScalar(sunDirection, 1000, new Cesium.Cartesian3()),
+                new Cesium.Cartesian3()
+            );
+
+            // 更新或创建Babylon辅助线
+            if (this._showSunDirectionLine) {
+                if (!this._directionLine) {
+                    // 如果辅助线不存在，创建新的辅助线
+                    this._directionLine = BABYLON.MeshBuilder.CreateLines(
+                        "directionLine",
+                        { points: [new BABYLON.Vector3(0, 0, 0), this.cartesianToBabylon(endPoint)] },
+                        this.scene
+                    );
+                    const lineMaterial = new BABYLON.StandardMaterial("lineMaterial", this.scene);
+                    lineMaterial.diffuseColor = new BABYLON.Color3(1, 0, 0);
+                    this._directionLine.material = lineMaterial;
+                } else {
+                    // 如果辅助线已存在，只更新其顶点数据
+                    const points = [new BABYLON.Vector3(0, 0, 0), this.cartesianToBabylon(endPoint)];
+                    const positions = [];
+                    for (const point of points) {
+                        positions.push(point.x, point.y, point.z);
+                    }
+                    this._directionLine.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+                }
+            } else if (this._directionLine) {
+                // 如果配置为不显示且辅助线存在，则销毁辅助线
+                this._directionLine.dispose();
+                this._directionLine = null;
+            }
         }
     }
 
     private cart2vec(cart: Cesium.Cartesian3): BABYLON.Vector3 {
         return new BABYLON.Vector3(cart.x, cart.z, cart.y);
+    }
+
+    /**
+     * 将Cesium的Cartesian3坐标转换为Babylon的Vector3坐标
+     * @param cartesian Cesium的笛卡尔坐标
+     * @returns Babylon的三维向量坐标
+     */
+    public cartesianToBabylon(cartesian: Cesium.Cartesian3): BABYLON.Vector3 {
+        // 1. 将基准点转换为地理坐标
+        const basePointCartographic = Cesium.Cartographic.fromCartesian(this.basePoint);
+
+        // 2. 将目标点转换为地理坐标
+        const targetCartographic = Cesium.Cartographic.fromCartesian(cartesian);
+
+        // 3. 计算经纬度差值（弧度）
+        const lonDiff = targetCartographic.longitude - basePointCartographic.longitude;
+        const latDiff = targetCartographic.latitude - basePointCartographic.latitude;
+
+        // 4. 计算高度差值（米）
+        const heightDiff = targetCartographic.height - basePointCartographic.height;
+
+        // 5. 计算东西方向和南北方向的距离（米）
+        // 使用球面距离近似
+        const radius = 6378137.0; // WGS84椭球体的平均半径（米）
+        const eastDistance = radius * Math.cos(basePointCartographic.latitude) * lonDiff;
+        const northDistance = radius * latDiff;
+
+        // 6. 转换为Babylon坐标系
+        // Babylon中：
+        // x对应东西方向（东为正）
+        // y对应高度方向（上为正）
+        // z对应南北方向（北为正）
+        return new BABYLON.Vector3(
+            eastDistance,
+            heightDiff,
+            northDistance
+        );
+    }
+
+    /**
+     * 将经纬度坐标转换为Babylon的Vector3坐标
+     * @param longitude 经度（度）
+     * @param latitude 纬度（度）
+     * @param height 高度（米）
+     * @returns Babylon的三维向量坐标
+     */
+    public lonLatToBabylon(longitude: number, latitude: number, height: number = 0): BABYLON.Vector3 {
+        // 首先转换为Cesium的Cartesian3坐标
+        const cartesian = Cesium.Cartesian3.fromDegrees(longitude, latitude, height);
+        // 然后转换为相对于基准点的Babylon坐标
+        return this.cartesianToBabylon(cartesian);
+    }
+
+    /**
+     * 将Babylon的Vector3坐标转换为Cesium的Cartesian3坐标
+     * @param vector Babylon的三维向量坐标
+     * @returns Cesium的笛卡尔坐标
+     */
+    public babylonToCartesian(vector: BABYLON.Vector3): Cesium.Cartesian3 {
+        // 创建相对于基准点的偏移（注意：需要将Babylon的xyz转换为Cesium的xyz）
+        const offset = new Cesium.Cartesian3(vector.x, vector.z, vector.y);
+        // 将偏移添加到基准点
+        return Cesium.Cartesian3.add(this.basePoint, offset, new Cesium.Cartesian3());
     }
 
     /**
@@ -330,6 +426,16 @@ export class CesiumBabylonFusion {
 
         if (this._resizeObserver) {
             this._resizeObserver.disconnect();
+        }
+
+        if (this._directionLine) {
+            this._directionLine.dispose();
+            this._directionLine = null;
+        }
+
+        if (this.sunLight) {
+            this.sunLight.dispose();
+            this.sunLight = null;
         }
 
         if (this.engine) {
@@ -388,5 +494,36 @@ export class CesiumBabylonFusion {
                 onMeshPicked(pickedMesh);
             }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    }
+
+    /**
+     * 将Cesium的方向向量转换为Babylon的方向向量
+     * @param direction Cesium中的方向向量
+     * @returns Babylon中的方向向量
+     */
+    private cesiumDirectionToBabylon(direction: Cesium.Cartesian3): BABYLON.Vector3 {
+        // 1. 在基准点位置建立一个局部ENU坐标系的变换矩阵
+        const transform = Cesium.Transforms.eastNorthUpToFixedFrame(this.basePoint);
+
+        // 2. 计算从ECEF到ENU的逆变换矩阵
+        const inverseTransform = Cesium.Matrix4.inverse(transform, new Cesium.Matrix4());
+
+        // 3. 将方向向量从ECEF转换到ENU
+        const localDirection = Cesium.Matrix4.multiplyByPointAsVector(
+            inverseTransform,
+            direction,
+            new Cesium.Cartesian3()
+        );
+
+        // 4. 将ENU坐标系的向量转换为Babylon坐标系
+        // ENU到Babylon的映射：
+        // East   (x) -> Babylon X
+        // North  (y) -> Babylon Z
+        // Up     (z) -> Babylon Y
+        return new BABYLON.Vector3(
+            localDirection.x,
+            localDirection.z,
+            localDirection.y
+        );
     }
 } 

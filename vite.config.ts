@@ -14,7 +14,7 @@ export default defineConfig({
             entry: resolve(__dirname, 'src/index.ts'),
             name: 'CesiumBabylonFusion',
             fileName: 'index',
-            formats: ['es', 'cjs']
+            formats: ['es', 'cjs', 'umd']
         },
         rollupOptions: {
             external: ['@babylonjs/core', 'cesium'],
@@ -27,6 +27,8 @@ export default defineConfig({
         },
         sourcemap: true,
         minify: 'esbuild',
-        target: 'es2015'
+        target: 'es2015',
+        outDir: 'dist',
+        emptyOutDir: true
     }
 }); 

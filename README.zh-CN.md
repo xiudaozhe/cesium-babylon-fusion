@@ -87,9 +87,6 @@ const fusion = new CesiumBabylonFusion({
 const cesiumViewer = fusion.cesiumViewer;
 const babylonScene = fusion.babylonScene;
 
-// 访问根节点
-const rootNode = fusion.babylonRootNode;
-
 // 清理资源
 function cleanup() {
     fusion.dispose();
@@ -116,14 +113,17 @@ function animate() {
 animate();
 ```
 
-### 禁用光照同步
+### 光照配置
 
-如果您想独立控制 Babylon.js 的光照：
+您可以自定义光照行为：
 
 ```typescript
 const fusion = new CesiumBabylonFusion({
     container: container,
-    enableLightSync: false // 禁用自动光照同步
+    enableLightSync: false, // 禁用自动光照同步
+    enableShadow: true, // 启用阴影生成
+    lightDistance: 1000, // 设置平行光距离
+    showSunDirectionLine: true // 显示太阳方向的调试线
 });
 ```
 
@@ -169,6 +169,9 @@ interface CesiumBabylonFusionOptions {
     basePoint?: Cesium.Cartesian3;       // 可选的坐标系统基准点
     autoRender?: boolean;                // 启用自动渲染（默认：true）
     enableLightSync?: boolean;           // 启用光照同步（默认：true）
+    enableShadow?: boolean;              // 启用阴影生成（默认：false）
+    lightDistance?: number;              // 平行光距离（默认：100）
+    showSunDirectionLine?: boolean;      // 显示太阳方向的调试线（默认：false）
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // 网格点击事件回调函数
 }
 ```
@@ -178,7 +181,6 @@ interface CesiumBabylonFusionOptions {
 - `cesiumViewer`：获取 Cesium 查看器实例
 - `babylonScene`：获取 Babylon.js 场景实例
 - `babylonEngine`：获取 Babylon.js 引擎实例
-- `babylonRootNode`：获取用于网格父节点的根变换节点
 
 #### 方法
 
@@ -209,6 +211,9 @@ interface CesiumBabylonFusionOptions {
 - 根据太阳高度调整光照强度
 - 通过半球光提供环境光照
 - 支持昼夜循环模拟
+- 可选的阴影生成
+- 可配置的光照距离
+- 太阳方向的调试可视化
 
 ### 性能考虑
 - 单一渲染循环控制两个引擎
@@ -245,6 +250,59 @@ interface CesiumBabylonFusionOptions {
 查看 `examples` 目录以获取更详细的示例：
 - `basic.html`：基本设置和使用
 - 更多示例即将推出...
+
+### 完整的阴影和网格示例
+
+以下是一个综合示例，展示了如何设置带阴影的融合场景、创建网格以及处理相机定位：
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container.value,
+    basePoint: Cesium.Cartesian3.fromDegrees(120, 30, 0), // 设置基准点为杭州
+    cesiumOptions: {
+      timeline: true,
+      animation: true,
+    },
+    enableLightSync: true,
+    enableShadow: true,
+    showSunDirectionLine: true,
+    onMeshPicked,
+});
+
+const { viewer, scene } = fusion;
+
+// 在 Cesium 地球上启用光照
+viewer.scene.globe.enableLighting = true;
+
+// 创建一个红色立方体
+const mesh = BABYLON.MeshBuilder.CreateBox("mesh", { size: 10 }, scene);
+const material = new BABYLON.StandardMaterial("material", scene);
+material.diffuseColor = new BABYLON.Color3(1, 0, 0);
+mesh.material = material;
+mesh.position = new BABYLON.Vector3(0, 10, 0);
+
+// 将立方体添加为阴影投射者
+fusion.shadowGenerator.addShadowCaster(mesh);
+
+// 创建一个绿色地面接收阴影
+const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
+const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+groundMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0);
+ground.material = groundMaterial;
+ground.receiveShadows = true;
+
+// 移动相机以查看场景
+viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(120, 30, 10),
+});
+```
+
+这个示例演示了：
+- 设置启用阴影的融合场景
+- 创建和定位 Babylon.js 网格
+- 配置阴影的投射和接收
+- 控制 Cesium 相机
+- 使用基准点进行局部坐标系统对齐
 
 ## 贡献
 

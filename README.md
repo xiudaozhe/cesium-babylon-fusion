@@ -87,9 +87,6 @@ const fusion = new CesiumBabylonFusion({
 const cesiumViewer = fusion.cesiumViewer;
 const babylonScene = fusion.babylonScene;
 
-// Access the root node for adding custom meshes
-const rootNode = fusion.babylonRootNode;
-
 // Clean up resources
 function cleanup() {
     fusion.dispose();
@@ -116,14 +113,17 @@ function animate() {
 animate();
 ```
 
-### Disable Lighting Synchronization
+### Lighting Configuration
 
-If you want to control Babylon.js lighting independently:
+You can customize the lighting behavior:
 
 ```typescript
 const fusion = new CesiumBabylonFusion({
     container: container,
-    enableLightSync: false // Disable automatic lighting sync
+    enableLightSync: false, // Disable automatic lighting sync
+    enableShadow: true, // Enable shadow generation
+    lightDistance: 1000, // Set the distance of the directional light
+    showSunDirectionLine: true // Show debug line for sun direction
 });
 ```
 
@@ -159,6 +159,9 @@ interface CesiumBabylonFusionOptions {
     basePoint?: Cesium.Cartesian3;       // Optional coordinate system base point
     autoRender?: boolean;                // Enable automatic rendering (default: true)
     enableLightSync?: boolean;           // Enable lighting sync (default: true)
+    enableShadow?: boolean;              // Enable shadow generation (default: false)
+    lightDistance?: number;              // Distance of the directional light (default: 100)
+    showSunDirectionLine?: boolean;      // Show debug line for sun direction (default: false)
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // Callback for mesh click events
 }
 ```
@@ -173,6 +176,16 @@ interface CesiumBabylonFusionOptions {
 
 - `render()`: Manually trigger a render frame
 - `dispose()`: Clean up resources, stop render loop, and remove canvases
+
+### Using Babylon.js Meshes
+
+The library automatically parents new meshes to ensure proper coordinate system alignment:
+
+```typescript
+// Create a new mesh
+const box = BABYLON.MeshBuilder.CreateBox("box", {}, fusion.babylonScene);
+// The mesh will be automatically parented correctly, no manual setup needed
+```
 
 ## Technical Details
 
@@ -198,6 +211,9 @@ Uses a unified render loop executing in the following order:
 - Adjusts light intensity based on sun elevation
 - Provides ambient lighting through hemispheric light
 - Supports day/night cycle simulation
+- Optional shadow generation
+- Configurable light distance
+- Debug visualization for sun direction
 
 ### Performance Considerations
 - Single render loop controlling both engines
@@ -234,6 +250,59 @@ The package automatically handles coordinate conversion between Cesium and Babyl
 Check out the `examples` directory for more detailed examples:
 - `basic.html`: Basic setup and usage
 - More examples coming soon...
+
+### Complete Example with Shadows and Meshes
+
+Here's a comprehensive example showing how to set up the fusion with shadows, create meshes, and handle camera positioning:
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container.value,
+    basePoint: Cesium.Cartesian3.fromDegrees(120, 30, 0), // Set base point to Hangzhou
+    cesiumOptions: {
+      timeline: true,
+      animation: true,
+    },
+    enableLightSync: true,
+    enableShadow: true,
+    showSunDirectionLine: true,
+    onMeshPicked,
+});
+
+const { viewer, scene } = fusion;
+
+// Enable lighting on Cesium globe
+viewer.scene.globe.enableLighting = true;
+
+// Create a red box
+const mesh = BABYLON.MeshBuilder.CreateBox("mesh", { size: 10 }, scene);
+const material = new BABYLON.StandardMaterial("material", scene);
+material.diffuseColor = new BABYLON.Color3(1, 0, 0);
+mesh.material = material;
+mesh.position = new BABYLON.Vector3(0, 10, 0);
+
+// Add the box as a shadow caster
+fusion.shadowGenerator.addShadowCaster(mesh);
+
+// Create a green ground that receives shadows
+const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
+const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+groundMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0);
+ground.material = groundMaterial;
+ground.receiveShadows = true;
+
+// Move camera to view the scene
+viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(120, 30, 10),
+});
+```
+
+This example demonstrates:
+- Setting up the fusion with shadows enabled
+- Creating and positioning Babylon.js meshes
+- Configuring shadow casting and receiving
+- Controlling the Cesium camera
+- Using the base point for local coordinate system alignment
 
 ## Contributing
 

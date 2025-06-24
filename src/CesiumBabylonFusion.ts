@@ -51,11 +51,10 @@ export class CesiumBabylonFusion {
     private basePointBabylon!: BABYLON.Vector3;
     private cesiumContainer!: HTMLDivElement;
     private babylonCanvas!: HTMLCanvasElement;
-    private rootNode!: BABYLON.TransformNode;
     private _isDisposed: boolean = false;
     private _autoRender: boolean = true;
     private _enableLightSync: boolean = true;
-    private _showSunDirectionLine: boolean = true;
+    private _showSunDirectionLine: boolean = false;
     private _enableShadow: boolean = false;
     private _lightDistance: number = 1000;
     private _resizeObserver!: ResizeObserver;
@@ -102,7 +101,7 @@ export class CesiumBabylonFusion {
         this._options = options;
         this._autoRender = options.autoRender ?? true;
         this._enableLightSync = options.enableLightSync ?? true;
-        this._showSunDirectionLine = options.showSunDirectionLine ?? true;
+        this._showSunDirectionLine = options.showSunDirectionLine ?? false;
         this._enableShadow = options.enableShadow ?? false;
         this._lightDistance = options.lightDistance ?? 50;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
@@ -485,13 +484,6 @@ export class CesiumBabylonFusion {
         if (this.babylonCanvas && this.babylonCanvas.parentNode) {
             this.babylonCanvas.parentNode.removeChild(this.babylonCanvas);
         }
-    }
-
-    /**
-     * 获取根节点实例
-     */
-    public get babylonRootNode(): BABYLON.TransformNode {
-        return this.rootNode;
     }
 
     /**

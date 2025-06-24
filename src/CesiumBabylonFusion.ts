@@ -26,6 +26,16 @@ export interface CesiumBabylonFusionOptions {
      */
     showSunDirectionLine?: boolean;
     /**
+     * 是否启用阴影
+     * @default false
+     */
+    enableShadow?: boolean;
+    /**
+     * 太阳光源距离
+     * @default 1000
+     */
+    lightDistance?: number;
+    /**
      * 点击事件回调
      */
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void;
@@ -46,10 +56,14 @@ export class CesiumBabylonFusion {
     private _autoRender: boolean = true;
     private _enableLightSync: boolean = true;
     private _showSunDirectionLine: boolean = true;
+    private _enableShadow: boolean = false;
+    private _lightDistance: number = 1000;
     private _resizeObserver!: ResizeObserver;
     private _options: CesiumBabylonFusionOptions;
     private _directionLine: BABYLON.LinesMesh | null = null;
     private _currentSunDirection: BABYLON.Vector3 = new BABYLON.Vector3(0, -1, 0);
+    // 阴影生成器,外部盒子需要addShadowCaster 才能有阴影
+    public shadowGenerator: BABYLON.ShadowGenerator | null = null;
 
     /**
      * 获取当前太阳光方向
@@ -89,6 +103,8 @@ export class CesiumBabylonFusion {
         this._autoRender = options.autoRender ?? true;
         this._enableLightSync = options.enableLightSync ?? true;
         this._showSunDirectionLine = options.showSunDirectionLine ?? true;
+        this._enableShadow = options.enableShadow ?? false;
+        this._lightDistance = options.lightDistance ?? 50;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
         this.basePointBabylon = this.cart2vec(this.basePoint);
 
@@ -161,6 +177,14 @@ export class CesiumBabylonFusion {
         // 只在启用光照同步时创建太阳光
         if (this._enableLightSync) {
             this.sunLight = new BABYLON.DirectionalLight('sunLight', this._currentSunDirection.scale(-1), this.scene);
+            // 启用阴影生成
+            if (this._enableShadow) {
+                this.scene.shadowsEnabled = true;
+                // 设置阴影生成器参数
+                this.shadowGenerator = new BABYLON.ShadowGenerator(1024, this.sunLight);
+                this.shadowGenerator.useBlurExponentialShadowMap = true;
+                this.shadowGenerator.blurScale = 2;
+            }
         }
     }
 
@@ -307,18 +331,13 @@ export class CesiumBabylonFusion {
             // 当太阳在地平线以下时为0，正上方时为1，之间线性插值
             const intensity = Math.max(0, Math.sin(heightAngle));
 
-            // 更新或创建太阳光
-            if (this._enableLightSync) {
-                if (!this.sunLight) {
-                    this.sunLight = new BABYLON.DirectionalLight('sunLight', this._currentSunDirection.scale(-1), this.scene);
-                } else {
-                    this.sunLight.direction = this._currentSunDirection.scale(-1);
-                    // 设置光照强度
-                    this.sunLight.intensity = intensity;
-                }
-            } else if (this.sunLight) {
-                this.sunLight.dispose();
-                this.sunLight = null;
+            // 更新太阳光
+            if (this.sunLight) {
+                // 设置光源位置（在光照方向上的一个远点）
+                this.sunLight.position = this._currentSunDirection.scale(this._lightDistance)
+                this.sunLight.direction = this._currentSunDirection.scale(-1);
+                // 设置光照强度
+                this.sunLight.intensity = intensity;
             }
 
             // 计算终点位置 (基准点 + 方向向量 * 1000)
@@ -439,6 +458,11 @@ export class CesiumBabylonFusion {
         if (this._directionLine) {
             this._directionLine.dispose();
             this._directionLine = null;
+        }
+
+        if (this.shadowGenerator) {
+            this.shadowGenerator.dispose();
+            this.shadowGenerator = null;
         }
 
         if (this.sunLight) {

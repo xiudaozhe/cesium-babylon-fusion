@@ -127,6 +127,32 @@ const fusion = new CesiumBabylonFusion({
 });
 ```
 
+### 相机控制模式
+
+库支持不同的相机控制模式：
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container,
+    controlMode: 'auto', // 'cesium' | 'babylon' | 'auto'
+    autoSwitchHeight: 1500 // auto模式的高度阈值（米）
+});
+
+// 您还可以在运行时更改控制模式
+fusion.setControlMode('babylon');
+
+// 获取当前控制模式
+console.log('当前模式:', fusion.controlMode);
+console.log('实际模式:', fusion.actualControlMode);
+```
+
+**控制模式：**
+- `'cesium'`：Cesium 控制相机，Babylon.js 跟随
+- `'babylon'`：Babylon.js 控制相机，Cesium 跟随  
+- `'auto'`：根据相机高度自动切换模式
+  - 高于阈值：使用 Cesium 控制（适用于大范围导航）
+  - 低于阈值：使用 Babylon.js 控制（适用于详细检查）
+
 ### 处理网格点击事件
 
 您可以通过 Cesium 的点击事件来处理 Babylon.js 网格的点击：
@@ -172,6 +198,8 @@ interface CesiumBabylonFusionOptions {
     enableShadow?: boolean;              // 启用阴影生成（默认：false）
     lightDistance?: number;              // 平行光距离（默认：100）
     showSunDirectionLine?: boolean;      // 显示太阳方向的调试线（默认：false）
+    controlMode?: 'cesium' | 'babylon' | 'auto'; // 相机控制模式（默认：'cesium'）
+    autoSwitchHeight?: number;           // auto模式的高度阈值，单位米（默认：1000）
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // 网格点击事件回调函数
 }
 ```
@@ -181,10 +209,15 @@ interface CesiumBabylonFusionOptions {
 - `cesiumViewer`：获取 Cesium 查看器实例
 - `babylonScene`：获取 Babylon.js 场景实例
 - `babylonEngine`：获取 Babylon.js 引擎实例
+- `controlMode`：获取当前控制模式
+- `actualControlMode`：获取实际控制模式（在auto模式下有用）
+- `babylonCameraController`：获取 Babylon.js 相机控制器（仅在babylon模式下可用）
 
 #### 方法
 
 - `render()`：手动触发渲染帧
+- `setControlMode(mode)`：更改相机控制模式
+- `setAutoSwitchHeight(height)`：设置auto模式的高度阈值
 - `dispose()`：清理资源，停止渲染循环，并移除画布
 
 ## 技术细节
@@ -192,7 +225,11 @@ interface CesiumBabylonFusionOptions {
 ### 画布布局
 本包在提供的容器中创建两个画布：
 1. Cesium 画布（底层）
-2. Babylon.js 画布（顶层，禁用指针事件）
+2. Babylon.js 画布（顶层）
+
+本包自动配置UI元素以实现最佳交互：
+- Cesium UI元素（工具栏、动画容器、时间线容器）设置为z-index: 999和pointer-events: auto
+- 根据当前控制模式管理画布的指针事件
 
 ### 渲染循环
 使用统一的渲染循环，按以下顺序执行：

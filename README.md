@@ -127,6 +127,32 @@ const fusion = new CesiumBabylonFusion({
 });
 ```
 
+### Camera Control Modes
+
+The library supports different camera control modes:
+
+```typescript
+const fusion = new CesiumBabylonFusion({
+    container: container,
+    controlMode: 'auto', // 'cesium' | 'babylon' | 'auto'
+    autoSwitchHeight: 1500 // Height threshold for auto mode (in meters)
+});
+
+// You can also change the control mode at runtime
+fusion.setControlMode('babylon');
+
+// Get current control mode
+console.log('Current mode:', fusion.controlMode);
+console.log('Actual mode:', fusion.actualControlMode);
+```
+
+**Control Modes:**
+- `'cesium'`: Cesium controls the camera, Babylon.js follows
+- `'babylon'`: Babylon.js controls the camera, Cesium follows  
+- `'auto'`: Automatically switches between modes based on camera height
+  - Above threshold: Uses Cesium control (good for large-scale navigation)
+  - Below threshold: Uses Babylon.js control (good for detailed inspection)
+
 ### Handle Mesh Click Events
 
 You can handle click events on Babylon.js meshes through Cesium's viewer:
@@ -162,6 +188,8 @@ interface CesiumBabylonFusionOptions {
     enableShadow?: boolean;              // Enable shadow generation (default: false)
     lightDistance?: number;              // Distance of the directional light (default: 100)
     showSunDirectionLine?: boolean;      // Show debug line for sun direction (default: false)
+    controlMode?: 'cesium' | 'babylon' | 'auto'; // Camera control mode (default: 'cesium')
+    autoSwitchHeight?: number;           // Height threshold for auto mode in meters (default: 1000)
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // Callback for mesh click events
 }
 ```
@@ -171,10 +199,15 @@ interface CesiumBabylonFusionOptions {
 - `cesiumViewer`: Get the Cesium viewer instance
 - `babylonScene`: Get the Babylon.js scene instance
 - `babylonEngine`: Get the Babylon.js engine instance
+- `controlMode`: Get the current control mode
+- `actualControlMode`: Get the actual control mode (useful in auto mode)
+- `babylonCameraController`: Get the Babylon.js camera controller (only available in babylon mode)
 
 #### Methods
 
 - `render()`: Manually trigger a render frame
+- `setControlMode(mode)`: Change the camera control mode
+- `setAutoSwitchHeight(height)`: Set the height threshold for auto mode
 - `dispose()`: Clean up resources, stop render loop, and remove canvases
 
 ### Using Babylon.js Meshes
@@ -192,7 +225,11 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {}, fusion.babylonScene);
 ### Canvas Layout
 The package creates two canvases in the provided container:
 1. Cesium canvas (bottom layer)
-2. Babylon.js canvas (top layer, pointer events disabled)
+2. Babylon.js canvas (top layer)
+
+The package automatically configures UI elements for optimal interaction:
+- Cesium UI elements (toolbar, animation container, timeline container) are set with z-index: 999 and pointer-events: auto
+- Canvas pointer events are managed based on the current control mode
 
 ### Render Loop
 Uses a unified render loop executing in the following order:

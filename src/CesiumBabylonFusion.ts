@@ -36,6 +36,20 @@ export interface CesiumBabylonFusionOptions {
      */
     lightDistance?: number;
     /**
+     * 控制模式：
+     * - 'cesium': Cesium 控制 Babylon
+     * - 'babylon': Babylon 控制 Cesium  
+     * - 'auto': 根据相机高度自动切换（>1000m为cesium，≤1000m为babylon）
+     * @default 'cesium'
+     */
+    controlMode?: 'cesium' | 'babylon' | 'auto';
+    /**
+     * auto模式下的高度切换阈值（米）
+     * 高于此值使用Cesium控制，低于此值使用Babylon控制
+     * @default 1000
+     */
+    autoSwitchHeight?: number;
+    /**
      * 点击事件回调
      */
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void;
@@ -61,6 +75,10 @@ export class CesiumBabylonFusion {
     private _options: CesiumBabylonFusionOptions;
     private _directionLine: BABYLON.LinesMesh | null = null;
     private _currentSunDirection: BABYLON.Vector3 = new BABYLON.Vector3(0, -1, 0);
+    private _controlMode: 'cesium' | 'babylon' | 'auto' = 'cesium';
+    private _actualControlMode: 'cesium' | 'babylon' = 'cesium'; // auto模式下的实际控制模式
+    private _cameraController: BABYLON.ArcRotateCamera | null = null;
+    private _autoSwitchHeight: number; // auto模式的切换高度阈值（米）
     // 阴影生成器,外部盒子需要addShadowCaster 才能有阴影
     public shadowGenerator: BABYLON.ShadowGenerator | null = null;
 
@@ -93,6 +111,27 @@ export class CesiumBabylonFusion {
         return this.engine;
     }
 
+    /**
+     * 获取当前控制模式
+     */
+    public get controlMode(): 'cesium' | 'babylon' | 'auto' {
+        return this._controlMode;
+    }
+
+    /**
+     * 获取实际的控制模式（auto模式下返回当前实际使用的模式）
+     */
+    public get actualControlMode(): 'cesium' | 'babylon' {
+        return this._actualControlMode;
+    }
+
+    /**
+     * 获取 Babylon 相机控制器（仅在 babylon 控制模式下可用）
+     */
+    public get babylonCameraController(): BABYLON.ArcRotateCamera | null {
+        return this._cameraController;
+    }
+
     constructor(options: CesiumBabylonFusionOptions) {
         if (!options.container) {
             throw new Error('Container element is required');
@@ -104,6 +143,9 @@ export class CesiumBabylonFusion {
         this._showSunDirectionLine = options.showSunDirectionLine ?? false;
         this._enableShadow = options.enableShadow ?? false;
         this._lightDistance = options.lightDistance ?? 50;
+        this._controlMode = options.controlMode ?? 'cesium';
+        this._autoSwitchHeight = options.autoSwitchHeight ?? 1000;
+        this._actualControlMode = this._controlMode === 'auto' ? 'cesium' : this._controlMode;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
         this.basePointBabylon = this.cart2vec(this.basePoint);
 
@@ -111,7 +153,7 @@ export class CesiumBabylonFusion {
             this.initializeCanvases(options.container);
             this.initializeCesium(options.cesiumOptions);
             this.initializeBabylon();
-            this.setupClickHandling();
+            this.setupEventHandling();
             this.setupRenderLoop();
             this.setupResizeHandling(options.container);
         } catch (error) {
@@ -137,7 +179,16 @@ export class CesiumBabylonFusion {
         this.babylonCanvas.style.width = '100%';
         this.babylonCanvas.style.height = '100%';
         this.babylonCanvas.style.position = 'absolute';
-        this.babylonCanvas.style.pointerEvents = 'none';
+
+        // 根据实际控制模式设置事件处理
+        if (this._actualControlMode === 'cesium') {
+            this.babylonCanvas.style.pointerEvents = 'none';
+            cesiumContainer.style.pointerEvents = 'auto';
+        } else {
+            this.babylonCanvas.style.pointerEvents = 'auto';
+            cesiumContainer.style.pointerEvents = 'none';
+        }
+
         container.appendChild(this.babylonCanvas);
 
         // Store the cesium container reference
@@ -159,6 +210,32 @@ export class CesiumBabylonFusion {
             ...cesiumOptions
         });
 
+        // 设置Cesium工具栏等元素的z-index
+        this.setCesiumElementsZIndex();
+    }
+
+    /**
+ * 设置Cesium特定元素的z-index为999并启用pointer-events
+ */
+    private setCesiumElementsZIndex(): void {
+        // 需要设置样式的class列表
+        const classNames = [
+            'cesium-viewer-toolbar',
+            'cesium-viewer-animationContainer',
+            'cesium-viewer-timelineContainer'
+        ];
+
+        // 使用setTimeout确保DOM元素已经创建
+        setTimeout(() => {
+            classNames.forEach(className => {
+                const elements = document.getElementsByClassName(className);
+                for (let i = 0; i < elements.length; i++) {
+                    const element = elements[i] as HTMLElement;
+                    element.style.zIndex = '999';
+                    element.style.pointerEvents = 'auto';
+                }
+            });
+        }, 100);
     }
 
     private initializeBabylon(): void {
@@ -171,7 +248,60 @@ export class CesiumBabylonFusion {
         this.engine = new BABYLON.Engine(this.babylonCanvas, true, engineOptions);
         this.scene = new BABYLON.Scene(this.engine);
         this.scene.clearColor = new BABYLON.Color4(0, 0, 0, 0.2);
-        this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 0, 0), this.scene);
+
+        // 根据实际控制模式创建不同类型的相机
+        if (this._actualControlMode === 'babylon') {
+            // Babylon 控制模式：创建 ArcRotateCamera 用于交互控制
+            this._cameraController = new BABYLON.ArcRotateCamera(
+                'arcCamera',
+                -Math.PI / 2,        // alpha: 水平角度（-90度，面向北方）
+                Math.PI / 3,         // beta: 垂直角度（60度，俯视角）
+                300,                 // radius: 距离目标的距离
+                BABYLON.Vector3.Zero(), // 目标点
+                this.scene
+            );
+
+            // 设置相机控制参数
+            this._cameraController.attachControl(this.babylonCanvas, true);
+            this._cameraController.setTarget(BABYLON.Vector3.Zero());
+
+            // 设置相机限制，提供更好的用户体验
+            this._cameraController.lowerBetaLimit = 0.1;  // 最小俯视角
+            this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;  // 最大俯视角
+            this._cameraController.lowerRadiusLimit = 10;   // 最小距离
+            this._cameraController.upperRadiusLimit = 2000; // 最大距离
+
+            // 设置默认视场角
+            this._cameraController.fov = Math.PI / 4; // 45度视场角
+
+            // 同时创建一个 FreeCamera 用于同步到 Cesium
+            this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 50, 200), this.scene);
+        } else {
+            // Cesium 控制模式：只创建 FreeCamera，用于接收 Cesium 的相机同步
+            this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 50, 200), this.scene);
+
+            // 如果是auto模式，预先创建ArcRotateCamera但不激活，以备自动切换时使用
+            if (this._controlMode === 'auto') {
+                this._cameraController = new BABYLON.ArcRotateCamera(
+                    'arcCamera',
+                    -Math.PI / 2,
+                    Math.PI / 3,
+                    300,
+                    BABYLON.Vector3.Zero(),
+                    this.scene
+                );
+
+                // 设置相机控制参数但不附加控制
+                this._cameraController.lowerBetaLimit = 0.1;
+                this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;
+                this._cameraController.lowerRadiusLimit = 10;
+                this._cameraController.upperRadiusLimit = 2000;
+                this._cameraController.fov = Math.PI / 4;
+
+                // 确保不激活这个相机
+                // this.scene.activeCamera保持为FreeCamera
+            }
+        }
 
         // 只在启用光照同步时创建太阳光
         if (this._enableLightSync) {
@@ -196,13 +326,26 @@ export class CesiumBabylonFusion {
                     // 1. 渲染 Cesium 场景
                     this.viewer.render();
 
-                    // 2. 同步相机和光照
-                    this.moveBabylonCamera();
+                    // 2. 检查并处理auto模式的自动切换
+                    if (this._controlMode === 'auto') {
+                        this.checkAndUpdateAutoMode();
+                    }
+
+                    // 3. 根据实际控制模式同步相机
+                    if (this._actualControlMode === 'cesium') {
+                        // Cesium 控制模式：从 Cesium 同步到 Babylon
+                        this.moveBabylonCamera();
+                    } else {
+                        // Babylon 控制模式：从 Babylon 同步到 Cesium
+                        this.moveCesiumCamera();
+                    }
+
+                    // 3. 同步光照
                     if (this._enableLightSync) {
                         this.updateBabylonLighting();
                     }
 
-                    // 3. 渲染 Babylon 场景
+                    // 4. 渲染 Babylon 场景
                     this.scene.render();
                 } catch (error) {
                     console.error('Error in render loop:', error);
@@ -231,11 +374,75 @@ export class CesiumBabylonFusion {
         }
 
         this.viewer.render();
-        this.moveBabylonCamera();
+
+        // 检查并处理auto模式的自动切换
+        if (this._controlMode === 'auto') {
+            this.checkAndUpdateAutoMode();
+        }
+
+        // 根据实际控制模式同步相机
+        if (this._actualControlMode === 'cesium') {
+            this.moveBabylonCamera();
+        } else {
+            this.moveCesiumCamera();
+        }
+
         if (this._enableLightSync) {
             this.updateBabylonLighting();
         }
         this.scene.render();
+    }
+
+    /**
+     * 同步 Babylon 相机到 Cesium 相机
+     * 这个方法处理从 Babylon 到 Cesium 的坐标系转换和相机参数同步
+     */
+    private moveCesiumCamera() {
+        if (!this._cameraController) return;
+
+        // 1. 同步视场角
+        if (this._cameraController.fov) {
+            const frustum = this.viewer.camera.frustum;
+            if (frustum instanceof Cesium.PerspectiveFrustum) {
+                // 创建新的 PerspectiveFrustum 来设置视场角
+                const newFrustum = new Cesium.PerspectiveFrustum({
+                    fov: this._cameraController.fov,
+                    aspectRatio: frustum.aspectRatio,
+                    near: frustum.near,
+                    far: frustum.far
+                });
+                this.viewer.camera.frustum = newFrustum;
+            }
+        }
+
+        // 2. 获取 Babylon 相机的位置、方向和上方向
+        const babylonPos = this._cameraController.position.clone();
+        const babylonTarget = this._cameraController.target.clone();
+        const babylonUp = this._cameraController.upVector.clone();
+
+        // 3. 计算方向向量（从位置指向目标）
+        const babylonDirection = babylonTarget.subtract(babylonPos).normalize();
+
+        // 4. 转换 Babylon 坐标到 Cesium 坐标系
+        // 这里需要使用与 cartesianToBabylon 相对应的逆转换
+        const cesiumPos = this.babylonPositionToCesium(babylonPos);
+        const cesiumDirection = this.babylonDirectionToCesium(babylonDirection);
+        const cesiumUp = this.babylonDirectionToCesium(babylonUp);
+
+        // 5. 设置 Cesium 相机
+        this.viewer.camera.position = cesiumPos;
+        this.viewer.camera.direction = cesiumDirection;
+        this.viewer.camera.up = cesiumUp;
+
+        // 确保方向向量已归一化
+        Cesium.Cartesian3.normalize(this.viewer.camera.direction, this.viewer.camera.direction);
+        Cesium.Cartesian3.normalize(this.viewer.camera.up, this.viewer.camera.up);
+
+        // 6. 同步 FreeCamera 用于其他计算
+        this.camera.position = babylonPos;
+        this.camera.setTarget(babylonTarget);
+        this.camera.upVector = babylonUp;
+        this.camera.fov = this._cameraController.fov;
     }
 
     /**
@@ -443,6 +650,38 @@ export class CesiumBabylonFusion {
     }
 
     /**
+     * 将Babylon的位置坐标精确转换为Cesium的Cartesian3坐标
+     * 这是cartesianToBabylon方法的逆转换，保证双向转换的一致性
+     * @param babylonPos Babylon的位置坐标
+     * @returns Cesium的笛卡尔坐标
+     */
+    private babylonPositionToCesium(babylonPos: BABYLON.Vector3): Cesium.Cartesian3 {
+        // 1. 获取基准点的地理坐标
+        const basePointCartographic = Cesium.Cartographic.fromCartesian(this.basePoint);
+
+        // 2. 从Babylon坐标系获取距离信息
+        // Babylon中：x=东西距离, y=高度差, z=南北距离
+        const eastDistance = babylonPos.x;      // 东西方向距离（米）
+        const heightDiff = babylonPos.y;        // 高度差（米）
+        const northDistance = babylonPos.z;     // 南北方向距离（米）
+
+        // 3. 计算地球半径（WGS84）
+        const radius = 6378137.0;
+
+        // 4. 计算经纬度偏移（弧度）
+        const lonDiff = eastDistance / (radius * Math.cos(basePointCartographic.latitude));
+        const latDiff = northDistance / radius;
+
+        // 5. 计算目标点的地理坐标
+        const targetLongitude = basePointCartographic.longitude + lonDiff;
+        const targetLatitude = basePointCartographic.latitude + latDiff;
+        const targetHeight = basePointCartographic.height + heightDiff;
+
+        // 6. 转换为Cesium的Cartesian3坐标
+        return Cesium.Cartesian3.fromRadians(targetLongitude, targetLatitude, targetHeight);
+    }
+
+    /**
      * 释放所有资源
      */
     public dispose(): void {
@@ -469,6 +708,11 @@ export class CesiumBabylonFusion {
             this.sunLight = null;
         }
 
+        if (this._cameraController) {
+            this._cameraController.dispose();
+            this._cameraController = null;
+        }
+
         if (this.engine) {
             this.engine.dispose();
         }
@@ -487,10 +731,21 @@ export class CesiumBabylonFusion {
     }
 
     /**
-     * 设置点击事件处理
+     * 根据控制模式设置事件处理
+     */
+    private setupEventHandling(): void {
+        if (this._actualControlMode === 'cesium') {
+            this.setupCesiumEventHandling();
+        } else {
+            this.setupBabylonEventHandling();
+        }
+    }
+
+    /**
+     * 设置Cesium模式的点击事件处理
      * 将Cesium的点击事件转发到Babylon场景中进行拾取测试
      */
-    private setupClickHandling(): void {
+    private setupCesiumEventHandling(): void {
         // 只在设置了回调函数时添加点击事件处理
         if (!this._options.onMeshPicked) {
             return;
@@ -518,6 +773,27 @@ export class CesiumBabylonFusion {
                 onMeshPicked(pickedMesh);
             }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    }
+
+    /**
+     * 设置Babylon模式的事件处理
+     * 在Babylon场景中直接处理点击事件
+     */
+    private setupBabylonEventHandling(): void {
+        // 只在设置了回调函数时添加点击事件处理
+        if (!this._options.onMeshPicked) {
+            return;
+        }
+
+        const onMeshPicked = this._options.onMeshPicked;
+
+        // 设置Babylon的点击事件处理
+        this.scene.onPointerObservable.add((pointerInfo) => {
+            if (pointerInfo.pickInfo && pointerInfo.type === BABYLON.PointerEventTypes.POINTERDOWN) {
+                const pickedMesh = pointerInfo.pickInfo.pickedMesh;
+                onMeshPicked(pickedMesh);
+            }
+        });
     }
 
     /**
@@ -549,5 +825,213 @@ export class CesiumBabylonFusion {
             localDirection.z,
             localDirection.y
         );
+    }
+
+    /**
+     * 将Babylon的方向向量转换为Cesium的方向向量
+     * 这是cesiumDirectionToBabylon方法的逆转换，保证双向转换的一致性
+     * @param direction Babylon中的方向向量
+     * @returns Cesium中的方向向量
+     */
+    private babylonDirectionToCesium(direction: BABYLON.Vector3): Cesium.Cartesian3 {
+        // 1. 将Babylon坐标系的向量转换为ENU坐标系
+        // Babylon到ENU的映射：
+        // Babylon X -> East   (x)
+        // Babylon Y -> Up     (z)  
+        // Babylon Z -> North  (y)
+        const localDirection = new Cesium.Cartesian3(
+            direction.x,    // East
+            direction.z,    // North
+            direction.y     // Up
+        );
+
+        // 2. 归一化方向向量
+        Cesium.Cartesian3.normalize(localDirection, localDirection);
+
+        // 3. 在基准点位置建立一个局部ENU坐标系的变换矩阵
+        const transform = Cesium.Transforms.eastNorthUpToFixedFrame(this.basePoint);
+
+        // 4. 将ENU坐标系的方向向量转换为ECEF
+        const cesiumDirection = Cesium.Matrix4.multiplyByPointAsVector(
+            transform,
+            localDirection,
+            new Cesium.Cartesian3()
+        );
+
+        // 5. 再次归一化确保精度
+        return Cesium.Cartesian3.normalize(cesiumDirection, new Cesium.Cartesian3());
+    }
+
+    /**
+     * 检查相机高度并自动切换控制模式（仅在auto模式下）
+     */
+    private checkAndUpdateAutoMode(): void {
+        if (this._controlMode !== 'auto') return;
+
+        const currentHeight = this.getCurrentCameraHeight();
+        const shouldUseCesium = currentHeight > this._autoSwitchHeight;
+        const targetMode: 'cesium' | 'babylon' = shouldUseCesium ? 'cesium' : 'babylon';
+
+        if (this._actualControlMode !== targetMode) {
+            this.switchActualControlMode(targetMode);
+        }
+    }
+
+    /**
+     * 获取当前相机相对于地面的高度（米）
+     */
+    private getCurrentCameraHeight(): number {
+        // 获取相机位置的地理坐标
+        const cameraCartographic = Cesium.Cartographic.fromCartesian(this.viewer.camera.position);
+        return cameraCartographic.height;
+    }
+
+    /**
+     * 动态切换实际控制模式（保持相机位置）
+     */
+    private switchActualControlMode(newMode: 'cesium' | 'babylon'): void {
+        if (this._actualControlMode === newMode) return;
+
+        // 保存当前相机状态
+        const currentCesiumPos = this.viewer.camera.position.clone();
+        const currentCesiumDir = this.viewer.camera.direction.clone();
+        const currentCesiumUp = this.viewer.camera.up.clone();
+
+        this._actualControlMode = newMode;
+
+        // 更新事件处理和相机控制器
+        this.updateControlsForMode(newMode);
+
+        // 恢复相机位置
+        this.viewer.camera.position = currentCesiumPos;
+        this.viewer.camera.direction = currentCesiumDir;
+        this.viewer.camera.up = currentCesiumUp;
+
+        // 同步到对应的Babylon相机
+        if (newMode === 'cesium') {
+            this.moveBabylonCamera();
+            // 确保FreeCamera是活动相机
+            this.scene.activeCamera = this.camera;
+        } else {
+            // 在Babylon控制模式下，使用简单但可靠的方法
+            if (this._cameraController) {
+                // 获取当前Babylon坐标系下的位置
+                const babylonPos = this.cartesianToBabylon(currentCesiumPos);
+
+                // 设置一个安全的目标点（场景中心附近）
+                const targetPos = new BABYLON.Vector3(0, 0, 0);
+
+                // 计算从相机到目标的距离
+                const distance = BABYLON.Vector3.Distance(babylonPos, targetPos);
+
+                // 确保距离在合理范围内
+                const safeDistance = Math.max(50, Math.min(distance, 500));
+
+                // 设置目标和相机参数
+                this._cameraController.setTarget(targetPos);
+                this._cameraController.radius = safeDistance;
+
+                // 使用简单的角度设置
+                this._cameraController.alpha = 0;
+                this._cameraController.beta = Math.PI / 4; // 45度俯视角
+
+                // 重建位置
+                this._cameraController.rebuildAnglesAndRadius();
+
+                // 设置为活动相机
+                this.scene.activeCamera = this._cameraController;
+            }
+        }
+
+        // 强制触发一次渲染以确保所有更新生效
+        if (this._autoRender && this.scene) {
+            this.scene.render();
+        }
+
+        console.log(`Switched to ${newMode} mode - Camera controller attached: ${this._cameraController?.attachControl !== undefined}`);
+    }
+
+    /**
+     * 根据控制模式更新控件设置
+     */
+    private updateControlsForMode(mode: 'cesium' | 'babylon'): void {
+        if (mode === 'cesium') {
+            // 切换到Cesium控制
+            this.babylonCanvas.style.pointerEvents = 'none';
+            this.cesiumContainer.style.pointerEvents = 'auto';
+
+            // 如果有ArcRotateCamera，禁用其控制
+            if (this._cameraController) {
+                this._cameraController.detachControl();
+            }
+        } else {
+            // 切换到Babylon控制
+            this.babylonCanvas.style.pointerEvents = 'auto';
+            this.cesiumContainer.style.pointerEvents = 'none';
+
+            // 如果没有ArcRotateCamera，创建一个
+            if (!this._cameraController) {
+                this._cameraController = new BABYLON.ArcRotateCamera(
+                    'arcCamera',
+                    -Math.PI / 2,
+                    Math.PI / 3,
+                    300,
+                    BABYLON.Vector3.Zero(),
+                    this.scene
+                );
+
+                // 设置相机控制参数
+                this._cameraController.lowerBetaLimit = 0.1;
+                this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;
+                this._cameraController.lowerRadiusLimit = 10;
+                this._cameraController.upperRadiusLimit = 2000;
+                this._cameraController.fov = Math.PI / 4;
+            }
+
+            // 确保ArcRotateCamera已经从任何旧的控制中分离
+            this._cameraController.detachControl();
+
+            // 重新附加到当前canvas
+            this._cameraController.attachControl(this.babylonCanvas, true);
+
+            // 确保相机是当前活动的相机
+            this.scene.activeCamera = this._cameraController;
+        }
+    }
+
+    /**
+     * 设置控制模式
+     * @param mode 控制模式：'cesium' | 'babylon' | 'auto'
+     */
+    public setControlMode(mode: 'cesium' | 'babylon' | 'auto'): void {
+        if (this._controlMode === mode) return;
+
+        const oldMode = this._controlMode;
+        this._controlMode = mode;
+
+        if (mode === 'auto') {
+            // 切换到auto模式，根据当前高度确定实际模式
+            const currentHeight = this.getCurrentCameraHeight();
+            const targetMode: 'cesium' | 'babylon' = currentHeight > this._autoSwitchHeight ? 'cesium' : 'babylon';
+            this.switchActualControlMode(targetMode);
+        } else {
+            // 切换到固定模式
+            this._actualControlMode = mode;
+            this.switchActualControlMode(mode);
+        }
+
+        console.log(`Control mode switched from ${oldMode} to ${mode} (actual: ${this._actualControlMode})`);
+    }
+
+    /**
+     * 设置auto模式的高度切换阈值
+     * @param height 高度阈值（米），高于此值使用Cesium控制，低于此值使用Babylon控制
+     */
+    public setAutoSwitchHeight(height: number): void {
+        this._autoSwitchHeight = height;
+        // 如果当前是auto模式，立即检查是否需要切换
+        if (this._controlMode === 'auto') {
+            this.checkAndUpdateAutoMode();
+        }
     }
 } 

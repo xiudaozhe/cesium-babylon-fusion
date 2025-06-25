@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cesium-Babylon 双向控制示例</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .control-panel h3 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .mode-indicator {
+            background: #2196F3;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+
+        .instructions {
+            font-size: 12px;
+            line-height: 1.4;
+            color: #ccc;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container"></div>
+
+    <div class="control-panel">
+        <h3>双向控制示例</h3>
+
+        <div class="mode-indicator" id="modeIndicator">
+            当前模式: Cesium 控制
+        </div>
+
+        <div class="control-group">
+            <label>控制模式切换:</label>
+            <button id="cesiumModeBtn">Cesium 控制</button>
+            <button id="babylonModeBtn">Babylon 控制</button>
+            <button id="autoModeBtn">Auto 模式</button>
+        </div>
+
+        <div class="control-group">
+            <label>状态信息:</label>
+            <div id="statusInfo" style="font-size: 11px; color: #aaa; margin-top: 5px;">
+                高度: -- m | 实际模式: --
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>添加测试对象:</label>
+            <button id="addBoxBtn">添加立方体</button>
+            <button id="addSphereBtn">添加球体</button>
+            <button id="clearBtn">清除所有</button>
+        </div>
+
+        <div class="instructions">
+            <strong>操作说明:</strong><br>
+            • <strong>Cesium 模式</strong>: 使用鼠标在 Cesium 中控制视角（左键拖拽旋转，右键拖拽平移，滚轮缩放）<br>
+            • <strong>Babylon 模式</strong>: 使用鼠标在 Babylon 中控制视角（左键拖拽旋转，Ctrl+左键平移，滚轮缩放）<br>
+            • <strong>Auto 模式</strong>: 根据相机高度自动切换（>1000m为Cesium，≤1000m为Babylon）<br>
+            • 点击模型可以获取拾取信息<br>
+            • 两种模式下的相机会实时双向同步<br>
+            • 可以随时手动切换控制模式
+        </div>
+    </div>
+
+    <script type="module">
+        import { CesiumBabylonFusion } from '../src/index.ts';
+        import * as BABYLON from '@babylonjs/core';
+        import * as Cesium from 'cesium';
+
+        // 设置 Cesium token（请替换为你的实际 token）
+        Cesium.Ion.defaultAccessToken = 'your-cesium-ion-token';
+
+        let fusion = null;
+        let currentMode = 'cesium';
+        const meshes = [];
+        let statusUpdateInterval = null;
+
+        // DOM 元素
+        const container = document.getElementById('container');
+        const modeIndicator = document.getElementById('modeIndicator');
+        const cesiumModeBtn = document.getElementById('cesiumModeBtn');
+        const babylonModeBtn = document.getElementById('babylonModeBtn');
+        const autoModeBtn = document.getElementById('autoModeBtn');
+        const statusInfo = document.getElementById('statusInfo');
+        const addBoxBtn = document.getElementById('addBoxBtn');
+        const addSphereBtn = document.getElementById('addSphereBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        // 初始化函数
+        function initFusion(controlMode) {
+            // 如果已存在实例，先销毁
+            if (fusion) {
+                if (statusUpdateInterval) {
+                    clearInterval(statusUpdateInterval);
+                    statusUpdateInterval = null;
+                }
+                fusion.dispose();
+                fusion = null;
+            }
+
+            // 清空容器
+            container.innerHTML = '';
+
+            // 创建新的融合实例
+            fusion = new CesiumBabylonFusion({
+                container: container,
+                controlMode: controlMode,
+                basePoint: Cesium.Cartesian3.fromDegrees(116.3974, 39.9093, 0), // 北京坐标
+                enableLightSync: true,
+                showSunDirectionLine: true,
+                onMeshPicked: (mesh) => {
+                    if (mesh) {
+                        console.log('拾取到模型:', mesh.name);
+                        alert(`拾取到模型: ${mesh.name}`);
+                    } else {
+                        console.log('未拾取到模型');
+                    }
+                }
+            });
+
+            // 添加一些基础场景对象
+            addTestObjects();
+
+            currentMode = controlMode;
+            updateUI();
+
+            // 启动状态更新
+            startStatusUpdate();
+        }
+
+        // 启动状态信息更新
+        function startStatusUpdate() {
+            statusUpdateInterval = setInterval(() => {
+                if (fusion && fusion.cesiumViewer) {
+                    const cameraPos = fusion.cesiumViewer.camera.position;
+                    const cartographic = Cesium.Cartographic.fromCartesian(cameraPos);
+                    const height = Math.round(cartographic.height);
+                    const actualMode = fusion.actualControlMode;
+                    statusInfo.textContent = `高度: ${height} m | 实际模式: ${actualMode === 'cesium' ? 'Cesium' : 'Babylon'}`;
+                }
+            }, 100); // 每100ms更新一次
+        }
+
+        // 设置控制模式（新的高效方式）
+        function setControlMode(mode) {
+            if (!fusion) return;
+
+            fusion.setControlMode(mode);
+            currentMode = mode;
+            updateUI();
+        }
+
+        // 添加测试对象
+        function addTestObjects() {
+            // 添加地面
+            const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 1000, height: 1000 }, fusion.babylonScene);
+            const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", fusion.babylonScene);
+            groundMaterial.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+            ground.material = groundMaterial;
+            ground.receiveShadows = true;
+            meshes.push(ground);
+
+            // 添加光源阴影
+            if (fusion.shadowGenerator) {
+                fusion.shadowGenerator.addShadowCaster(ground);
+            }
+        }
+
+        // 添加立方体
+        function addBox() {
+            const box = BABYLON.MeshBuilder.CreateBox(`box_${meshes.length}`, { size: 50 }, fusion.babylonScene);
+            box.position = new BABYLON.Vector3(
+                (Math.random() - 0.5) * 500,
+                25,
+                (Math.random() - 0.5) * 500
+            );
+
+            const material = new BABYLON.StandardMaterial(`boxMaterial_${meshes.length}`, fusion.babylonScene);
+            material.diffuseColor = new BABYLON.Color3(Math.random(), Math.random(), Math.random());
+            box.material = material;
+
+            // 添加阴影
+            if (fusion.shadowGenerator) {
+                fusion.shadowGenerator.addShadowCaster(box);
+            }
+
+            meshes.push(box);
+        }
+
+        // 添加球体
+        function addSphere() {
+            const sphere = BABYLON.MeshBuilder.CreateSphere(`sphere_${meshes.length}`, { diameter: 40 }, fusion.babylonScene);
+            sphere.position = new BABYLON.Vector3(
+                (Math.random() - 0.5) * 500,
+                20,
+                (Math.random() - 0.5) * 500
+            );
+
+            const material = new BABYLON.StandardMaterial(`sphereMaterial_${meshes.length}`, fusion.babylonScene);
+            material.diffuseColor = new BABYLON.Color3(Math.random(), Math.random(), Math.random());
+            sphere.material = material;
+
+            // 添加阴影
+            if (fusion.shadowGenerator) {
+                fusion.shadowGenerator.addShadowCaster(sphere);
+            }
+
+            meshes.push(sphere);
+        }
+
+        // 清除所有测试对象（保留地面）
+        function clearMeshes() {
+            meshes.forEach((mesh, index) => {
+                if (index > 0) { // 保留第一个（地面）
+                    mesh.dispose();
+                }
+            });
+            meshes.length = 1; // 只保留地面
+        }
+
+        // 更新UI状态
+        function updateUI() {
+            const modeNames = {
+                'cesium': 'Cesium 控制',
+                'babylon': 'Babylon 控制',
+                'auto': 'Auto 模式'
+            };
+
+            modeIndicator.textContent = `当前模式: ${modeNames[currentMode]}`;
+
+            cesiumModeBtn.disabled = currentMode === 'cesium';
+            babylonModeBtn.disabled = currentMode === 'babylon';
+            autoModeBtn.disabled = currentMode === 'auto';
+        }
+
+        // 事件监听
+        cesiumModeBtn.addEventListener('click', () => {
+            setControlMode('cesium');
+        });
+
+        babylonModeBtn.addEventListener('click', () => {
+            setControlMode('babylon');
+        });
+
+        autoModeBtn.addEventListener('click', () => {
+            setControlMode('auto');
+        });
+
+        addBoxBtn.addEventListener('click', addBox);
+        addSphereBtn.addEventListener('click', addSphere);
+        clearBtn.addEventListener('click', clearMeshes);
+
+        // 初始化应用
+        initFusion('cesium');
+    </script>
+</body>
+
+</html>

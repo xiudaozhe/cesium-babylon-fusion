@@ -39,16 +39,16 @@ export interface CesiumBabylonFusionOptions {
      * 控制模式：
      * - 'cesium': Cesium 控制 Babylon
      * - 'babylon': Babylon 控制 Cesium  
-     * - 'auto': 根据相机高度自动切换（>1000m为cesium，≤1000m为babylon）
+     * - 'auto': 根据相机到basePoint的距离自动切换（>1000m为cesium，≤1000m为babylon）
      * @default 'cesium'
      */
     controlMode?: 'cesium' | 'babylon' | 'auto';
     /**
-     * auto模式下的高度切换阈值（米）
-     * 高于此值使用Cesium控制，低于此值使用Babylon控制
+     * auto模式下的距离切换阈值（米）
+     * 相机到basePoint距离大于此值使用Cesium控制，小于等于此值使用Babylon控制
      * @default 1000
      */
-    autoSwitchHeight?: number;
+    autoSwitchDistance?: number;
     /**
      * 点击事件回调
      */
@@ -78,9 +78,13 @@ export class CesiumBabylonFusion {
     private _controlMode: 'cesium' | 'babylon' | 'auto' = 'cesium';
     private _actualControlMode: 'cesium' | 'babylon' = 'cesium'; // auto模式下的实际控制模式
     private _cameraController: BABYLON.ArcRotateCamera | null = null;
-    private _autoSwitchHeight: number; // auto模式的切换高度阈值（米）
+    private _autoSwitchDistance: number; // auto模式的切换距离阈值（米）
+    private _distance: number = 0;//当前相机距离目标点的距离，cesium相机
     // 阴影生成器,外部盒子需要addShadowCaster 才能有阴影
     public shadowGenerator: BABYLON.ShadowGenerator | null = null;
+    // 防抖相关属性
+    private _modeSwitchDebounceMs: number = 300; // 防抖时间间隔（毫秒）
+    private _lastModeSwitchTime: number = 0; // 上次切换模式的时间戳
 
     /**
      * 获取当前太阳光方向
@@ -144,7 +148,7 @@ export class CesiumBabylonFusion {
         this._enableShadow = options.enableShadow ?? false;
         this._lightDistance = options.lightDistance ?? 50;
         this._controlMode = options.controlMode ?? 'cesium';
-        this._autoSwitchHeight = options.autoSwitchHeight ?? 1000;
+        this._autoSwitchDistance = options.autoSwitchDistance ?? 1000;
         this._actualControlMode = this._controlMode === 'auto' ? 'cesium' : this._controlMode;
         this.basePoint = options.basePoint || Cesium.Cartesian3.ZERO;
         this.basePointBabylon = this.cart2vec(this.basePoint);
@@ -269,7 +273,7 @@ export class CesiumBabylonFusion {
             this._cameraController.lowerBetaLimit = 0.1;  // 最小俯视角
             this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;  // 最大俯视角
             this._cameraController.lowerRadiusLimit = 10;   // 最小距离
-            this._cameraController.upperRadiusLimit = 2000; // 最大距离
+            this._cameraController.upperRadiusLimit = this._autoSwitchDistance; // 最大距离设置为自动切换距离
 
             // 设置默认视场角
             this._cameraController.fov = Math.PI / 4; // 45度视场角
@@ -295,7 +299,7 @@ export class CesiumBabylonFusion {
                 this._cameraController.lowerBetaLimit = 0.1;
                 this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;
                 this._cameraController.lowerRadiusLimit = 10;
-                this._cameraController.upperRadiusLimit = 2000;
+                this._cameraController.upperRadiusLimit = this._autoSwitchDistance;
                 this._cameraController.fov = Math.PI / 4;
 
                 // 确保不激活这个相机
@@ -868,11 +872,18 @@ export class CesiumBabylonFusion {
     private checkAndUpdateAutoMode(): void {
         if (this._controlMode !== 'auto') return;
 
-        const currentHeight = this.getCurrentCameraHeight();
-        const shouldUseCesium = currentHeight > this._autoSwitchHeight;
+        // 防抖检查：如果距离上次切换时间不足防抖间隔，跳过本次检查
+        const currentTime = Date.now();
+        if (currentTime - this._lastModeSwitchTime < this._modeSwitchDebounceMs) {
+            return;
+        }
+
+        const currentDistance = this.getCurrentCameraDistance();
+        const shouldUseCesium = currentDistance > this._autoSwitchDistance;
         const targetMode: 'cesium' | 'babylon' = shouldUseCesium ? 'cesium' : 'babylon';
 
         if (this._actualControlMode !== targetMode) {
+            this._lastModeSwitchTime = currentTime; // 更新最后切换时间
             this.switchActualControlMode(targetMode);
         }
     }
@@ -880,10 +891,12 @@ export class CesiumBabylonFusion {
     /**
      * 获取当前相机相对于地面的高度（米）
      */
-    private getCurrentCameraHeight(): number {
+    private getCurrentCameraDistance(): number {
         // 获取相机位置的地理坐标
-        const cameraCartographic = Cesium.Cartographic.fromCartesian(this.viewer.camera.position);
-        return cameraCartographic.height;
+        const distance = Cesium.Cartesian3.distance(this.viewer.camera.position, this.basePoint);
+        console.log(distance)
+        this._distance = distance;
+        return distance;
     }
 
     /**
@@ -916,20 +929,14 @@ export class CesiumBabylonFusion {
             // 在Babylon控制模式下，使用简单但可靠的方法
             if (this._cameraController) {
                 // 获取当前Babylon坐标系下的位置
-                const babylonPos = this.cartesianToBabylon(currentCesiumPos);
-
                 // 设置一个安全的目标点（场景中心附近）
                 const targetPos = new BABYLON.Vector3(0, 0, 0);
 
-                // 计算从相机到目标的距离
-                const distance = BABYLON.Vector3.Distance(babylonPos, targetPos);
 
-                // 确保距离在合理范围内
-                const safeDistance = Math.max(50, Math.min(distance, 500));
 
                 // 设置目标和相机参数
                 this._cameraController.setTarget(targetPos);
-                this._cameraController.radius = safeDistance;
+                this._cameraController.radius = this._distance + 2;//半径
 
                 // 使用简单的角度设置
                 this._cameraController.alpha = 0;
@@ -984,7 +991,7 @@ export class CesiumBabylonFusion {
                 this._cameraController.lowerBetaLimit = 0.1;
                 this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;
                 this._cameraController.lowerRadiusLimit = 10;
-                this._cameraController.upperRadiusLimit = 2000;
+                this._cameraController.upperRadiusLimit = this._autoSwitchDistance;
                 this._cameraController.fov = Math.PI / 4;
             }
 
@@ -1011,8 +1018,8 @@ export class CesiumBabylonFusion {
 
         if (mode === 'auto') {
             // 切换到auto模式，根据当前高度确定实际模式
-            const currentHeight = this.getCurrentCameraHeight();
-            const targetMode: 'cesium' | 'babylon' = currentHeight > this._autoSwitchHeight ? 'cesium' : 'babylon';
+            const currentHeight = this.getCurrentCameraDistance();
+            const targetMode: 'cesium' | 'babylon' = currentHeight > this._autoSwitchDistance ? 'cesium' : 'babylon';
             this.switchActualControlMode(targetMode);
         } else {
             // 切换到固定模式
@@ -1024,11 +1031,17 @@ export class CesiumBabylonFusion {
     }
 
     /**
-     * 设置auto模式的高度切换阈值
-     * @param height 高度阈值（米），高于此值使用Cesium控制，低于此值使用Babylon控制
+     * 设置auto模式的距离切换阈值
+     * @param distance 距离阈值（米），大于此值使用Cesium控制，小于等于此值使用Babylon控制
      */
-    public setAutoSwitchHeight(height: number): void {
-        this._autoSwitchHeight = height;
+    public setAutoSwitchDistance(distance: number): void {
+        this._autoSwitchDistance = distance;
+
+        // 更新ArcRotateCamera的最大半径限制
+        if (this._cameraController) {
+            this._cameraController.upperRadiusLimit = this._autoSwitchDistance;
+        }
+
         // 如果当前是auto模式，立即检查是否需要切换
         if (this._controlMode === 'auto') {
             this.checkAndUpdateAutoMode();

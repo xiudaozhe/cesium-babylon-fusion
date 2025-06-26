@@ -129,29 +129,37 @@ const fusion = new CesiumBabylonFusion({
 
 ### 相机控制模式
 
-库支持不同的相机控制模式：
+库支持三种不同的相机控制模式：
 
 ```typescript
 const fusion = new CesiumBabylonFusion({
     container: container,
     controlMode: 'auto', // 'cesium' | 'babylon' | 'auto'
-    autoSwitchHeight: 1500 // auto模式的高度阈值（米）
+    autoSwitchDistance: 1000 // auto模式的距离切换阈值（米）
 });
 
 // 您还可以在运行时更改控制模式
 fusion.setControlMode('babylon');
+
+// 动态设置auto模式的切换距离
+fusion.setAutoSwitchDistance(1500);
 
 // 获取当前控制模式
 console.log('当前模式:', fusion.controlMode);
 console.log('实际模式:', fusion.actualControlMode);
 ```
 
-**控制模式：**
+**控制模式详解：**
 - `'cesium'`：Cesium 控制相机，Babylon.js 跟随
+  - 适用于大范围地球导航和飞行
+  - 支持地球表面的自然导航
 - `'babylon'`：Babylon.js 控制相机，Cesium 跟随  
-- `'auto'`：根据相机高度自动切换模式
-  - 高于阈值：使用 Cesium 控制（适用于大范围导航）
-  - 低于阈值：使用 Babylon.js 控制（适用于详细检查）
+  - 使用 ArcRotateCamera 进行精确的本地场景检查
+  - 适用于建筑物内部或详细模型查看
+- `'auto'`：根据相机到基准点的距离自动切换模式
+  - 距离大于阈值：自动使用 Cesium 控制（远距离观察）
+  - 距离小于等于阈值：自动使用 Babylon.js 控制（近距离检查）
+  - 内置防抖机制，避免频繁切换造成的抖动
 
 ### 处理网格点击事件
 
@@ -191,15 +199,15 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {}, fusion.babylonScene);
 interface CesiumBabylonFusionOptions {
     container: HTMLDivElement;           // 两个画布的容器元素
     cesiumOptions?: Cesium.Viewer.ConstructorOptions; // 可选的 Cesium 查看器选项
-    babylonOptions?: BABYLON.EngineOptions; // 可选的 Babylon.js 引擎选项
+    babylonOptions?: BABYLON.EngineOptions; // 可选的 Babylon.js 引擎选项（默认：{ alpha: true }）
     basePoint?: Cesium.Cartesian3;       // 可选的坐标系统基准点
     autoRender?: boolean;                // 启用自动渲染（默认：true）
     enableLightSync?: boolean;           // 启用光照同步（默认：true）
+    showSunDirectionLine?: boolean;      // 显示太阳方向的调试线（默认：true）
     enableShadow?: boolean;              // 启用阴影生成（默认：false）
-    lightDistance?: number;              // 平行光距离（默认：100）
-    showSunDirectionLine?: boolean;      // 显示太阳方向的调试线（默认：false）
+    lightDistance?: number;              // 太阳光源距离（默认：1000）
     controlMode?: 'cesium' | 'babylon' | 'auto'; // 相机控制模式（默认：'cesium'）
-    autoSwitchHeight?: number;           // auto模式的高度阈值，单位米（默认：1000）
+    autoSwitchDistance?: number;         // auto模式的距离切换阈值，单位米（默认：1000）
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // 网格点击事件回调函数
 }
 ```
@@ -209,15 +217,20 @@ interface CesiumBabylonFusionOptions {
 - `cesiumViewer`：获取 Cesium 查看器实例
 - `babylonScene`：获取 Babylon.js 场景实例
 - `babylonEngine`：获取 Babylon.js 引擎实例
+- `sunDirection`：获取当前太阳光方向向量（Babylon坐标系）
 - `controlMode`：获取当前控制模式
 - `actualControlMode`：获取实际控制模式（在auto模式下有用）
-- `babylonCameraController`：获取 Babylon.js 相机控制器（仅在babylon模式下可用）
+- `babylonCameraController`：获取 Babylon.js 相机控制器（仅在babylon控制模式下可用）
+- `shadowGenerator`：获取阴影生成器实例（外部网格需要addShadowCaster才能有阴影）
 
 #### 方法
 
 - `render()`：手动触发渲染帧
-- `setControlMode(mode)`：更改相机控制模式
-- `setAutoSwitchHeight(height)`：设置auto模式的高度阈值
+- `setControlMode(mode: 'cesium' | 'babylon' | 'auto')`：更改相机控制模式
+- `setAutoSwitchDistance(distance: number)`：设置auto模式的距离切换阈值
+- `cartesianToBabylon(cartesian: Cesium.Cartesian3): BABYLON.Vector3`：将Cesium坐标转换为Babylon坐标
+- `lonLatToBabylon(longitude: number, latitude: number, height?: number): BABYLON.Vector3`：将经纬度坐标转换为Babylon坐标
+- `babylonToCartesian(vector: BABYLON.Vector3): Cesium.Cartesian3`：将Babylon坐标转换为Cesium坐标
 - `dispose()`：清理资源，停止渲染循环，并移除画布
 
 ## 技术细节
@@ -238,10 +251,12 @@ interface CesiumBabylonFusionOptions {
 3. 渲染 Babylon.js 场景
 
 ### 坐标系统
-- 使用 Cesium 的坐标系统作为主要参考
-- 自动在 Cesium 和 Babylon.js 坐标系统之间转换
-- 支持使用基准点进行局部坐标系统对齐
-- 提供根变换节点用于正确的网格定位
+- 使用 Cesium 的WGS84地理坐标系统作为主要参考
+- 精确的坐标转换算法，支持大范围地理区域
+- 基于基准点的局部ENU（东-北-上）坐标系统
+- 自动处理 Cesium 和 Babylon.js 之间的坐标系统转换
+- 支持经纬度到本地坐标的直接转换
+- 内置防抖机制的相机控制切换，确保平滑的用户体验
 
 ### 光照系统
 - 将 Babylon.js 的平行光与 Cesium 的太阳位置同步
@@ -268,11 +283,25 @@ interface CesiumBabylonFusionOptions {
 3. 可能需要使用 Cesium 的其他功能
 
 ### 如何处理坐标转换？
-本包自动处理了 Cesium 和 Babylon.js 之间的坐标转换。但如果您需要自己处理坐标，请注意：
-1. Cesium 使用地理坐标系统（WGS84）
-2. Babylon.js 使用局部笛卡尔坐标系统
-3. 可以使用 `basePoint` 设置局部坐标系统的原点
-4. 所有 Babylon.js 网格会自动设置正确的父节点以确保正确定位
+本包提供了完整的坐标转换API，可以在不同坐标系统之间精确转换：
+
+```typescript
+// 1. 经纬度转换为Babylon坐标
+const babylonPos = fusion.lonLatToBabylon(120.0, 30.0, 100); // 经度、纬度、高度
+
+// 2. Cesium笛卡尔坐标转换为Babylon坐标
+const cesiumPoint = Cesium.Cartesian3.fromDegrees(120.0, 30.0, 100);
+const babylonPoint = fusion.cartesianToBabylon(cesiumPoint);
+
+// 3. Babylon坐标转换回Cesium坐标
+const backToCesium = fusion.babylonToCartesian(babylonPoint);
+```
+
+**坐标系统说明：**
+1. Cesium 使用WGS84地理坐标系统（经纬度+高度）
+2. Babylon.js 使用基于基准点的局部ENU坐标系统
+3. 所有转换都考虑了地球曲率和精确的大地测量学计算
+4. 支持大范围地理区域的高精度转换
 
 ### 如何调试渲染问题？
 1. 检查控制台是否有错误信息
@@ -288,58 +317,161 @@ interface CesiumBabylonFusionOptions {
 - `basic.html`：基本设置和使用
 - 更多示例即将推出...
 
-### 完整的阴影和网格示例
+### 综合功能演示示例
 
-以下是一个综合示例，展示了如何设置带阴影的融合场景、创建网格以及处理相机定位：
+以下是一个展示所有最新功能的完整示例：
 
 ```typescript
+import * as Cesium from 'cesium';
+import * as BABYLON from '@babylonjs/core';
+import { CesiumBabylonFusion } from 'cesium-babylon-fusion';
+
+// 创建融合场景，展示所有关键特性
 const fusion = new CesiumBabylonFusion({
-    container: container.value,
-    basePoint: Cesium.Cartesian3.fromDegrees(120, 30, 0), // 设置基准点为杭州
+    container: document.getElementById('mapContainer'),
+    basePoint: Cesium.Cartesian3.fromDegrees(120.15, 30.25, 0), // 杭州市中心
     cesiumOptions: {
-      timeline: true,
-      animation: true,
+        timeline: true,
+        animation: true,
+        terrainProvider: Cesium.createWorldTerrain(),
+    },
+    babylonOptions: {
+        alpha: true,
+        antialias: true
     },
     enableLightSync: true,
     enableShadow: true,
     showSunDirectionLine: true,
-    onMeshPicked,
+    lightDistance: 50,
+    controlMode: 'auto',
+    autoSwitchDistance: 1000, // 1公里为切换阈值
+    onMeshPicked: (mesh) => {
+        if (mesh) {
+            console.log('选中的网格:', mesh.name);
+            // 高亮选中的网格
+            if (mesh.material instanceof BABYLON.StandardMaterial) {
+                mesh.material.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0);
+            }
+        }
+    }
 });
 
-const { viewer, scene } = fusion;
+// 获取引擎实例
+const cesiumViewer = fusion.cesiumViewer;
+const babylonScene = fusion.babylonScene;
+const shadowGenerator = fusion.shadowGenerator;
 
-// 在 Cesium 地球上启用光照
-viewer.scene.globe.enableLighting = true;
+// 启用 Cesium 地球光照
+cesiumViewer.scene.globe.enableLighting = true;
 
-// 创建一个红色立方体
-const mesh = BABYLON.MeshBuilder.CreateBox("mesh", { size: 10 }, scene);
-const material = new BABYLON.StandardMaterial("material", scene);
-material.diffuseColor = new BABYLON.Color3(1, 0, 0);
-mesh.material = material;
-mesh.position = new BABYLON.Vector3(0, 10, 0);
+// 1. 在基准点创建主建筑物
+const mainBuilding = BABYLON.MeshBuilder.CreateBox("mainBuilding", { 
+    width: 20, height: 30, depth: 15 
+}, babylonScene);
+const buildingMaterial = new BABYLON.StandardMaterial("buildingMaterial", babylonScene);
+buildingMaterial.diffuseColor = new BABYLON.Color3(0.7, 0.7, 0.8);
+mainBuilding.material = buildingMaterial;
+mainBuilding.position = new BABYLON.Vector3(0, 15, 0); // 地面上方15米
+shadowGenerator?.addShadowCaster(mainBuilding);
 
-// 将立方体添加为阴影投射者
-fusion.shadowGenerator.addShadowCaster(mesh);
+// 2. 使用经纬度坐标创建其他建筑物
+const building2Pos = fusion.lonLatToBabylon(120.151, 30.251, 0);
+const building2 = BABYLON.MeshBuilder.CreateBox("building2", { 
+    width: 15, height: 25, depth: 12 
+}, babylonScene);
+building2.position = building2Pos.add(new BABYLON.Vector3(0, 12.5, 0));
+const building2Material = new BABYLON.StandardMaterial("building2Material", babylonScene);
+building2Material.diffuseColor = new BABYLON.Color3(0.8, 0.6, 0.4);
+building2.material = building2Material;
+shadowGenerator?.addShadowCaster(building2);
 
-// 创建一个绿色地面接收阴影
-const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 100, height: 100 }, scene);
-const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
-groundMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0);
+// 3. 创建地面接收阴影
+const ground = BABYLON.MeshBuilder.CreateGround("ground", { 
+    width: 200, height: 200 
+}, babylonScene);
+const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", babylonScene);
+groundMaterial.diffuseColor = new BABYLON.Color3(0.4, 0.6, 0.3);
 ground.material = groundMaterial;
 ground.receiveShadows = true;
 
-// 移动相机以查看场景
-viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(120, 30, 10),
+// 4. 演示坐标转换功能
+function demonstrateCoordinateConversion() {
+    // 经纬度转Babylon坐标
+    const lat = 30.25, lon = 120.15, height = 50;
+    const babylonPos = fusion.lonLatToBabylon(lon, lat, height);
+    console.log(`经纬度 (${lon}, ${lat}, ${height}) 转换为 Babylon 坐标:`, babylonPos);
+    
+    // Babylon坐标转回Cesium坐标
+    const cesiumPos = fusion.babylonToCartesian(babylonPos);
+    const cartographic = Cesium.Cartographic.fromCartesian(cesiumPos);
+    console.log('转换回的地理坐标:', {
+        longitude: Cesium.Math.toDegrees(cartographic.longitude),
+        latitude: Cesium.Math.toDegrees(cartographic.latitude),
+        height: cartographic.height
+    });
+}
+
+// 5. 监控控制模式切换
+function monitorControlMode() {
+    setInterval(() => {
+        console.log('当前控制模式:', fusion.controlMode);
+        console.log('实际控制模式:', fusion.actualControlMode);
+        console.log('当前太阳方向:', fusion.sunDirection);
+    }, 5000);
+}
+
+// 6. 演示相机控制
+function demonstrateCameraControl() {
+    // 远距离视角（Cesium控制）
+    cesiumViewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(120.15, 30.25, 2000),
+        duration: 3.0
+    });
+    
+    // 3秒后切换到近距离视角（Babylon控制）
+    setTimeout(() => {
+        cesiumViewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(120.15, 30.25, 200),
+            duration: 2.0
+        });
+    }, 4000);
+}
+
+// 7. 运行时配置调整
+function adjustRuntimeSettings() {
+    setTimeout(() => {
+        // 修改auto模式的切换距离
+        fusion.setAutoSwitchDistance(1500);
+        console.log('切换距离已更新为1500米');
+        
+        // 切换到手动控制模式
+        fusion.setControlMode('babylon');
+        console.log('已切换到Babylon控制模式');
+    }, 10000);
+}
+
+// 执行演示
+demonstrateCoordinateConversion();
+monitorControlMode();
+demonstrateCameraControl();
+adjustRuntimeSettings();
+
+// 清理资源
+window.addEventListener('beforeunload', () => {
+    fusion.dispose();
 });
 ```
 
-这个示例演示了：
-- 设置启用阴影的融合场景
-- 创建和定位 Babylon.js 网格
-- 配置阴影的投射和接收
-- 控制 Cesium 相机
-- 使用基准点进行局部坐标系统对齐
+**这个综合示例展示了：**
+- 完整的融合场景初始化，包含所有配置选项
+- 基于基准点和经纬度的精确网格定位
+- 完整的阴影系统配置和使用
+- auto控制模式的自动切换机制
+- 坐标转换API的使用方法
+- 网格点击事件的处理
+- 运行时参数的动态调整
+- 相机控制和动画效果
+- 资源管理和清理
 
 ## 贡献
 

@@ -129,29 +129,37 @@ const fusion = new CesiumBabylonFusion({
 
 ### Camera Control Modes
 
-The library supports different camera control modes:
+The library supports three different camera control modes:
 
 ```typescript
 const fusion = new CesiumBabylonFusion({
     container: container,
     controlMode: 'auto', // 'cesium' | 'babylon' | 'auto'
-    autoSwitchHeight: 1500 // Height threshold for auto mode (in meters)
+    autoSwitchDistance: 1000 // Distance switching threshold for auto mode (in meters)
 });
 
 // You can also change the control mode at runtime
 fusion.setControlMode('babylon');
+
+// Dynamically set the switching distance for auto mode
+fusion.setAutoSwitchDistance(1500);
 
 // Get current control mode
 console.log('Current mode:', fusion.controlMode);
 console.log('Actual mode:', fusion.actualControlMode);
 ```
 
-**Control Modes:**
+**Control Mode Details:**
 - `'cesium'`: Cesium controls the camera, Babylon.js follows
-- `'babylon'`: Babylon.js controls the camera, Cesium follows  
-- `'auto'`: Automatically switches between modes based on camera height
-  - Above threshold: Uses Cesium control (good for large-scale navigation)
-  - Below threshold: Uses Babylon.js control (good for detailed inspection)
+  - Suitable for large-scale earth navigation and flight
+  - Supports natural navigation on earth surface
+- `'babylon'`: Babylon.js controls the camera, Cesium follows
+  - Uses ArcRotateCamera for precise local scene inspection
+  - Suitable for interior building or detailed model viewing
+- `'auto'`: Automatically switches between modes based on camera distance to base point
+  - Distance greater than threshold: Automatically uses Cesium control (far observation)
+  - Distance less than or equal to threshold: Automatically uses Babylon.js control (close inspection)
+  - Built-in debounce mechanism to prevent jittering from frequent switching
 
 ### Handle Mesh Click Events
 
@@ -189,7 +197,7 @@ interface CesiumBabylonFusionOptions {
     lightDistance?: number;              // Distance of the directional light (default: 100)
     showSunDirectionLine?: boolean;      // Show debug line for sun direction (default: false)
     controlMode?: 'cesium' | 'babylon' | 'auto'; // Camera control mode (default: 'cesium')
-    autoSwitchHeight?: number;           // Height threshold for auto mode in meters (default: 1000)
+    autoSwitchDistance?: number;         // Distance switching threshold for auto mode in meters (default: 1000)
     onMeshPicked?: (mesh: BABYLON.AbstractMesh | null) => void; // Callback for mesh click events
 }
 ```
@@ -199,15 +207,20 @@ interface CesiumBabylonFusionOptions {
 - `cesiumViewer`: Get the Cesium viewer instance
 - `babylonScene`: Get the Babylon.js scene instance
 - `babylonEngine`: Get the Babylon.js engine instance
+- `sunDirection`: Get the current sun direction vector (in Babylon coordinate system)
 - `controlMode`: Get the current control mode
 - `actualControlMode`: Get the actual control mode (useful in auto mode)
-- `babylonCameraController`: Get the Babylon.js camera controller (only available in babylon mode)
+- `babylonCameraController`: Get the Babylon.js camera controller (only available in babylon control mode)
+- `shadowGenerator`: Get the shadow generator instance (external meshes need addShadowCaster to have shadows)
 
 #### Methods
 
 - `render()`: Manually trigger a render frame
-- `setControlMode(mode)`: Change the camera control mode
-- `setAutoSwitchHeight(height)`: Set the height threshold for auto mode
+- `setControlMode(mode: 'cesium' | 'babylon' | 'auto')`: Change the camera control mode
+- `setAutoSwitchDistance(distance: number)`: Set the distance threshold for auto mode
+- `cartesianToBabylon(cartesian: Cesium.Cartesian3): BABYLON.Vector3`: Convert Cesium coordinates to Babylon coordinates
+- `lonLatToBabylon(longitude: number, latitude: number, height?: number): BABYLON.Vector3`: Convert longitude/latitude coordinates to Babylon coordinates
+- `babylonToCartesian(vector: BABYLON.Vector3): Cesium.Cartesian3`: Convert Babylon coordinates to Cesium coordinates
 - `dispose()`: Clean up resources, stop render loop, and remove canvases
 
 ### Using Babylon.js Meshes

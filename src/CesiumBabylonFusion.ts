@@ -253,58 +253,18 @@ export class CesiumBabylonFusion {
         this.scene = new BABYLON.Scene(this.engine);
         this.scene.clearColor = new BABYLON.Color4(0, 0, 0, 0.2);
 
-        // 根据实际控制模式创建不同类型的相机
-        if (this._actualControlMode === 'babylon') {
-            // Babylon 控制模式：创建 ArcRotateCamera 用于交互控制
-            this._cameraController = new BABYLON.ArcRotateCamera(
-                'arcCamera',
-                -Math.PI / 2,        // alpha: 水平角度（-90度，面向北方）
-                Math.PI / 3,         // beta: 垂直角度（60度，俯视角）
-                300,                 // radius: 距离目标的距离
-                BABYLON.Vector3.Zero(), // 目标点
-                this.scene
-            );
+        // 创建 FreeCamera（所有模式都需要）
+        this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 50, 200), this.scene);
 
-            // 设置相机控制参数
-            this._cameraController.attachControl(this.babylonCanvas, true);
-            this._cameraController.setTarget(BABYLON.Vector3.Zero());
+        // 根据控制模式创建和配置 ArcRotateCamera
+        if (this._actualControlMode === 'babylon' || this._controlMode === 'auto') {
+            this._cameraController = this.createArcRotateCamera();
 
-            // 设置相机限制，提供更好的用户体验
-            this._cameraController.lowerBetaLimit = 0.1;  // 最小俯视角
-            this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;  // 最大俯视角
-            this._cameraController.lowerRadiusLimit = 10;   // 最小距离
-            this._cameraController.upperRadiusLimit = this._autoSwitchDistance; // 最大距离设置为自动切换距离
-
-            // 设置默认视场角
-            this._cameraController.fov = Math.PI / 4; // 45度视场角
-
-            // 同时创建一个 FreeCamera 用于同步到 Cesium
-            this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 50, 200), this.scene);
-        } else {
-            // Cesium 控制模式：只创建 FreeCamera，用于接收 Cesium 的相机同步
-            this.camera = new BABYLON.FreeCamera('camera', new BABYLON.Vector3(0, 50, 200), this.scene);
-
-            // 如果是auto模式，预先创建ArcRotateCamera但不激活，以备自动切换时使用
-            if (this._controlMode === 'auto') {
-                this._cameraController = new BABYLON.ArcRotateCamera(
-                    'arcCamera',
-                    -Math.PI / 2,
-                    Math.PI / 3,
-                    300,
-                    BABYLON.Vector3.Zero(),
-                    this.scene
-                );
-
-                // 设置相机控制参数但不附加控制
-                this._cameraController.lowerBetaLimit = 0.1;
-                this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;
-                this._cameraController.lowerRadiusLimit = 10;
-                this._cameraController.upperRadiusLimit = this._autoSwitchDistance;
-                this._cameraController.fov = Math.PI / 4;
-
-                // 确保不激活这个相机
-                // this.scene.activeCamera保持为FreeCamera
+            if (this._actualControlMode === 'babylon') {
+                // Babylon 控制模式：激活 ArcRotateCamera
+                this._cameraController.attachControl(this.babylonCanvas, true);
             }
+            // auto 模式下不激活，保持 FreeCamera 为活动相机
         }
 
         // 只在启用光照同步时创建太阳光
@@ -319,6 +279,32 @@ export class CesiumBabylonFusion {
                 this.shadowGenerator.blurScale = 2;
             }
         }
+    }
+
+    /**
+     * 创建并配置 ArcRotateCamera
+     * @returns 配置好的 ArcRotateCamera 实例
+     */
+    private createArcRotateCamera(): BABYLON.ArcRotateCamera {
+        const camera = new BABYLON.ArcRotateCamera(
+            'arcCamera',
+            -Math.PI / 2,        // alpha: 水平角度（-90度，面向北方）
+            Math.PI / 3,         // beta: 垂直角度（60度，俯视角）
+            300,                 // radius: 距离目标的距离
+            BABYLON.Vector3.Zero(), // 目标点
+            this.scene
+        );
+
+        // 设置相机限制，提供更好的用户体验
+        camera.lowerBetaLimit = 0.1;  // 最小俯视角
+        camera.upperBetaLimit = Math.PI / 2;  // 最大俯视角
+        camera.lowerRadiusLimit = 1;   // 最小距离
+        camera.upperRadiusLimit = this._autoSwitchDistance + 5; // 最大距离设置为自动切换距离
+
+        // 设置默认视场角
+        camera.fov = Math.PI / 4; // 45度视场角
+
+        return camera;
     }
 
     private setupRenderLoop(): void {
@@ -894,7 +880,6 @@ export class CesiumBabylonFusion {
     private getCurrentCameraDistance(): number {
         // 获取相机位置的地理坐标
         const distance = Cesium.Cartesian3.distance(this.viewer.camera.position, this.basePoint);
-        console.log(distance)
         this._distance = distance;
         return distance;
     }
@@ -936,7 +921,7 @@ export class CesiumBabylonFusion {
 
                 // 设置目标和相机参数
                 this._cameraController.setTarget(targetPos);
-                this._cameraController.radius = this._distance + 2;//半径
+                this._cameraController.radius = this._distance;//半径
 
                 // 使用简单的角度设置
                 this._cameraController.alpha = 0;
@@ -978,21 +963,7 @@ export class CesiumBabylonFusion {
 
             // 如果没有ArcRotateCamera，创建一个
             if (!this._cameraController) {
-                this._cameraController = new BABYLON.ArcRotateCamera(
-                    'arcCamera',
-                    -Math.PI / 2,
-                    Math.PI / 3,
-                    300,
-                    BABYLON.Vector3.Zero(),
-                    this.scene
-                );
-
-                // 设置相机控制参数
-                this._cameraController.lowerBetaLimit = 0.1;
-                this._cameraController.upperBetaLimit = Math.PI / 2 - 0.1;
-                this._cameraController.lowerRadiusLimit = 10;
-                this._cameraController.upperRadiusLimit = this._autoSwitchDistance;
-                this._cameraController.fov = Math.PI / 4;
+                this._cameraController = this.createArcRotateCamera();
             }
 
             // 确保ArcRotateCamera已经从任何旧的控制中分离
@@ -1039,7 +1010,7 @@ export class CesiumBabylonFusion {
 
         // 更新ArcRotateCamera的最大半径限制
         if (this._cameraController) {
-            this._cameraController.upperRadiusLimit = this._autoSwitchDistance;
+            this._cameraController.upperRadiusLimit = this._autoSwitchDistance + 5;
         }
 
         // 如果当前是auto模式，立即检查是否需要切换
